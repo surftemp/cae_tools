@@ -16,7 +16,7 @@
 import unittest
 import os.path
 
-from cae_tools.model import ConvAEModel
+from cae_tools.models.conv_ae_model import ConvAEModel
 
 data_folder = os.path.join(os.path.split(__file__)[0],"..","data")
 
