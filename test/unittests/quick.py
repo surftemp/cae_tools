@@ -26,12 +26,12 @@ class QuickTest(unittest.TestCase):
         test_name = "16x16_256x256"
         train_path = os.path.join(data_folder, test_name, "train.nc")
         test_path = os.path.join(data_folder,test_name,"test.nc")
-        mt = ConvAEModel("lowres","hires",fc_size=8,encoded_dim_size=4,nr_epochs=500)
-        mt.train(train_path,test_path)
+        mt = ConvAEModel(fc_size=8,encoded_dim_size=4,nr_epochs=500)
+        mt.train("lowres","hires",train_path,test_path)
         mt.save("/tmp/foobar")
 
-        mt2 = ConvAEModel("lowres", "hires")
+        mt2 = ConvAEModel()
         mt2.load("/tmp/foobar")
-        mt2.predict(train_path,"train_scores.nc")
-        mt2.predict(test_path, "test_scores.nc")
+        mt2.predict(train_path,"lowres","train_scores.nc","hires_estimate")
+        mt2.predict(test_path, "lowres","test_scores.nc","hires_estimate")
 

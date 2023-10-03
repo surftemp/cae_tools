@@ -31,6 +31,6 @@ def main():
 
     args = parser.parse_args()
 
-    mt = ConvAEModel(args.input_variable, args.input_variable)
+    mt = ConvAEModel()
     mt.load(args.model_folder)
-    mt.predict(args.data_path, args.output_path)
+    mt.predict(args.data_path, args.input_variable, args.output_path, args.prediction_variable)
