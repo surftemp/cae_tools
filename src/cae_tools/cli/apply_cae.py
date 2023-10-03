@@ -33,4 +33,4 @@ def main():
 
     mt = ConvAEModel()
     mt.load(args.model_folder)
-    mt.predict(args.data_path, args.input_variable, args.output_path, args.prediction_variable)
+    mt.apply(args.data_path, args.input_variable, args.output_path, args.prediction_variable)

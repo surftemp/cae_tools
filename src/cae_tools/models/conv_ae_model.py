@@ -22,7 +22,7 @@ import json
 import os
 import time
 
-from .model_sizer import create_model_spec
+from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
 from .encoder import Encoder
 from .decoder import Decoder
@@ -60,7 +60,7 @@ class ConvAEModel:
         self.lr = lr
         self.weight_decay = weight_decay
         self.use_gpu = use_gpu
-
+        self.spec = None
         self.history = {}
         self.optim = None
 
@@ -97,6 +97,10 @@ class ConvAEModel:
         with open(parameters_path, "w") as f:
             f.write(json.dumps(parameters))
 
+        spec_path = os.path.join(to_folder, "spec.json")
+        with open(spec_path, "w") as f:
+            f.write(json.dumps(self.spec.save()))
+
         history_path = os.path.join(to_folder, "history.json")
         with open(history_path, "w") as f:
             f.write(json.dumps(self.history))
@@ -129,15 +133,13 @@ class ConvAEModel:
         with open(history_path) as f:
             self.history = json.loads(f.read())
 
-        (input_chan, input_y, input_x) = self.input_shape
-        (output_chan, output_y, output_x) = self.output_shape
+        spec_path = os.path.join(from_folder, "spec.json")
+        with open(spec_path) as f:
+            self.spec = ModelSpec()
+            self.spec.load(json.loads(f.read()))
 
-        spec = create_model_spec(input_size=(input_y, input_x), input_channels=input_chan,
-                                 output_size=(output_y, output_x), output_channels=output_chan)
-        print(spec)
-
-        self.encoder = Encoder(spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        self.decoder = Decoder(spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
         self.encoder.load_state_dict(torch.load(encoder_path))
@@ -216,12 +218,11 @@ class ConvAEModel:
         self.input_shape = (input_chan, input_y, input_x)
         self.output_shape = (output_chan, output_y, output_x)
 
-        spec = create_model_spec(input_size=(input_y, input_x), input_channels=input_chan,
+        self.spec = create_model_spec(input_size=(input_y, input_x), input_channels=input_chan,
                                  output_size=(output_y, output_x), output_channels=output_chan)
-        print(spec)
 
-        self.encoder = Encoder(spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        self.decoder = Decoder(spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
         train_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -284,17 +285,22 @@ class ConvAEModel:
 
         print("elapsed:" + str(elapsed))
 
-    def predict(self, input_path, input_variable, output_path, prediction_variable="prediction"):
+    def apply(self, input_path, input_variable, output_path, prediction_variable="model_output",
+                channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
         """
-        Make predictions using this model
+        Apply this model to input data to produce an output estimate
 
         :param input_path: path to a netcdf4 file containing input data
         :param input_variable: name of the input variable in the input data
         :param output_path: path to a netcdf4 file to write containing the input data plus a prediction variable
         :param prediction_variable: the name of the prediction variable
+        :param channel_dimension: the name of the channel dimension in the prediction variable
+        :param y_dimension: the name of the y dimension in the prediction variable
+        :param x_dimension: the name of the x dimension in the prediction variable
         """
         score_ds = xr.open_dataset(input_path)
         n = score_ds[input_variable].shape[0]
+        n_dimension = score_ds[input_variable].dims[0]
         out_chan = self.output_shape[0]
         out_y = self.output_shape[1]
         out_x = self.output_shape[2]
@@ -318,6 +324,16 @@ class ConvAEModel:
             score_batches.append(low_res)
 
         self.__score(score_batches, save_arr=score_arr)
-        score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr), dims=("n", "chan", "y", "x"))
+        score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
+                dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
 
         score_ds.to_netcdf(output_path)
+
+    def print_layer_summary(self):
+        """
+        Print a summary of the encoder/input and decoder/output layers
+        """
+        if self.spec:
+            print(self.spec)
+        else:
+            print("Model has not been trained - no layers assigned yet")
