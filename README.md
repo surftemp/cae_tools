@@ -50,3 +50,17 @@ mt2.predict(train_path, "lowres", "train_scores.nc", "hires_estimate")
 mt2.predict(test_path, "lowres", "test_scores.nc", "hires_estimate")
 ```
 
+## Example
+
+Inputs are low resolution 16x16, for example:
+
+![image](https://github.com/surftemp/cae_tools/assets/58978249/885a4377-1b2c-4940-acd7-a663ef0b5233)
+
+Outputs are high resolution 256x256, for example:
+
+![image](https://github.com/surftemp/cae_tools/assets/58978249/3c1a57a8-5c21-4dc8-b61f-7eb91e9691a0)
+
+Model trained on input-output pairs can then reconstruct the high resoltuion outputs from low resolution inputs:
+
+![image](https://github.com/surftemp/cae_tools/assets/58978249/a9b357a2-7117-4c64-8763-a9d4b7139c17)
+
