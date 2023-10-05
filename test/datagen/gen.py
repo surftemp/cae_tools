@@ -25,48 +25,59 @@ class DataGenerator:
 
     """Generate Test Data Patterns for ConvAEModel"""
 
-    def __init__(self, target_size, coarsen_by):
-        self.target_size = target_size
-        self.coarsen_by = coarsen_by
+    def __init__(self, input_size, output_size):
+        self.input_size = input_size
+        self.output_size = output_size
 
-    def gen(self,mu=1.0):
-        x, y = np.meshgrid(np.linspace(-3,3,self.target_size), np.linspace(-1,2,self.target_size))
+    def gen(self,height,width,mu=1.0):
+        x, y = np.meshgrid(np.linspace(-3,3,height), np.linspace(-1,2,width))
         d = np.sqrt(x*x+y*y)
         sigma = 0.2
         g = np.exp(-( (d-mu)**2 / ( 2.0 * sigma**2 ) ) )
-        g = ndimage.rotate(g,15)[0:self.target_size,0:self.target_size]
+        g = ndimage.rotate(g,15)[0:height,0:width]
         return g
 
     def generate_data(self,n):
-        arr = np.zeros((n,1,256,256),dtype=np.float32)
+        arr1 = np.zeros((n,1,self.input_size[0],self.input_size[1]),dtype=np.float32)
+        noise = [random.random() for i in range(n)]
+
         for i in range(n):
-            arr[i,0,:,:] = 288+self.gen()*random.random()*5
+            arr1[i,0,:,:] = 288+self.gen(self.input_size[0],self.input_size[1])*noise[i]*5
 
-        da = xr.DataArray(data=arr,dims=("n","chan","y","x"))
-        return (da,self.coarsen(da))
+        da1 = xr.DataArray(data=arr1,dims=("n","chan","y1","x1"))
 
-    def coarsen(self,da):
-        return xr.DataArray(da.coarsen({"x":self.coarsen_by,"y":self.coarsen_by}).mean().values,dims=("n","chan","y2","x2"))
+        arr2 = np.zeros((n, 1, self.output_size[0], self.output_size[1]), dtype=np.float32)
+        for i in range(n):
+            arr2[i, 0, :, :] = 288 + self.gen(self.output_size[0],self.output_size[1]) * noise[i] * 5
+
+        da2 = xr.DataArray(data=arr2, dims=("n", "chan", "y2", "x2"))
+
+        return (da1,da2)
+
+
 
 import os
 
 data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
 
-folder = os.path.join(data_root_folder,"16x16_256x256")
+for test_size in [((24,20),(280,256))]:
 
-os.makedirs(folder,exist_ok=True)
+    ((i_h,i_w),(o_h,o_w)) = test_size
+    folder = os.path.join(data_root_folder,f"{i_h}x{i_w}_{o_h}x{o_w}")
 
-for filename in ["train.nc","test.nc"]:
+    os.makedirs(folder,exist_ok=True)
 
-    dg = DataGenerator(256,16)
-    (d,d2) = dg.generate_data(100)
+    for filename in ["train.nc","test.nc"]:
 
-    ds = xr.Dataset()
-    ds["hires"] = d
-    ds["lowres"] = d2
-    path = os.path.join(folder,filename)
-    ds.to_netcdf(path)
-    print(f"Written {path}")
+        dg = DataGenerator((i_h,i_w),(o_h,o_w))
+        (input_da,output_da) = dg.generate_data(100)
+
+        ds = xr.Dataset()
+        ds["hires"] = output_da
+        ds["lowres"] = input_da
+        path = os.path.join(folder,filename)
+        ds.to_netcdf(path)
+        print(f"Written {path}")
 
 
 

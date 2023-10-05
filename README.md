@@ -2,18 +2,21 @@
 
 A convolutional auto-encoder library for modelling image-to-image transformations
 
+## Dependencies
+
+`train_cae` and `apply_cae` requires: pytorch, xarray, netcdf4
+
+`evaluate_cae` requires htmlfive (https://github.com/niallmcc/html-five), xarray, netcdf4, pillow, seaborn, matplotlib
+
 ## Installation
 
-Requires: pytorch, xarray, netcdf4
+Install cae_tools into a python or conda environment containing the above dependencies, then:
 
-Either:
-
-* Clone this repo, and add the `src` folder to your PYTHONPATH
-
-Or:
-
-* run `pip install -e .`
-
+```
+git clone git@github.com:surftemp/cae_tools.git
+cd cae_tools`
+pip install -e .
+```
 
 ## CLI
 
@@ -26,7 +29,14 @@ train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --mod
 To apply:
 
 ```
-apply_cae test/data/16x16_256x256/test.nc /tmp/mymodel output.nc --input-variable=lowres
+apply_cae test/data/16x16_256x256/train.nc train_scores.nc --model-folder=/tmp/mymodel  --input-variable=lowres --prediction-variable hires_estimate
+apply_cae test/data/16x16_256x256/test.nc test_scores.nc --model-folder=/tmp/mymodel  --input-variable=lowres --prediction-variable hires_estimate
+```
+
+To evaluate:
+
+```
+evaluate_cae train_scores.nc test_score.nc evaluation.html --input-variable lowres --output-variable hires --model-folder=/tmp/mymodel --prediction-variable hires_estimate
 ```
 
 For help, run `train_cae --help` or `apply_cae --help`

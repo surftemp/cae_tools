@@ -37,3 +37,18 @@ class QuickTest(unittest.TestCase):
         mt2.apply(train_path,"lowres","train_scores.nc","hires_estimate")
         mt2.apply(test_path, "lowres","test_scores.nc","hires_estimate")
 
+    def test2(self):
+        test_name = "24x20_280x256"
+        train_path = os.path.join(data_folder, test_name, "train.nc")
+        test_path = os.path.join(data_folder, test_name, "test.nc")
+        mt = ConvAEModel(fc_size=8, encoded_dim_size=4, nr_epochs=500)
+        mt.train("lowres", "hires", train_path, test_path)
+        mt.print_layer_summary()
+        mt.save("/tmp/test2")
+
+        mt2 = ConvAEModel()
+        mt2.load("/tmp/test2")
+        mt2.print_layer_summary()
+        mt2.apply(train_path, "lowres", "train_scores.nc", "hires_estimate")
+        mt2.apply(test_path, "lowres", "test_scores.nc", "hires_estimate")
+
