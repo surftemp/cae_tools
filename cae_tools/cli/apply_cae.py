@@ -22,9 +22,9 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("data_path", help="path to netcdf4 file containing data to which model is applied")
-    parser.add_argument("model_folder", help="path to load the trained model from")
     parser.add_argument("output_path", help="path to write the netcdf4 file containing input data plus model outputs")
 
+    parser.add_argument("--model-folder", help="folder to save the trained model to", required=True)
     parser.add_argument("--input-variable", help="name of the input variable in training/test data", default="input")
     parser.add_argument("--prediction-variable", help="name of the prediction variable to create in output data",
                         default="model_output")
