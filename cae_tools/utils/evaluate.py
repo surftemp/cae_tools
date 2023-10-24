@@ -29,6 +29,7 @@ from .table_fragment import TableFragment
 from .image_fragment import InlineImageFragment
 from .utils import add_exo_dependencies
 from .tab_fragment import TabbedFragment
+import tempfile
 
 from .utils import anti_aliasing_style
 
@@ -81,7 +82,6 @@ class ModelEvaluator:
             with open(os.path.join(self.model_path,"parameters.json")) as f:
                 training_parameters = json.loads(f.read())
 
-        image_path = "/tmp/image.png"
 
         plot_variables = [self.input_variable,self.output_variable]
         if self.model_output_variable:
@@ -127,13 +127,14 @@ class ModelEvaluator:
             if computed_measures:
                 tf = TabbedFragment(partition+"_measures")
                 for measure in all_measures:
-                    values = [t[1][measure] for t in computed_measures]
-                    plot = sns.histplot(values)
-                    plot.set_title(measure)
-                    fig = plot.get_figure()
-                    fig.savefig(image_path)
-                    fig.clear()
-                    tf.add_tab(measure,InlineImageFragment(image_path))
+                    with tempfile.NamedTemporaryFile(suffix=".png") as p:
+                        values = [t[1][measure] for t in computed_measures]
+                        plot = sns.histplot(values)
+                        plot.set_title(measure)
+                        fig = plot.get_figure()
+                        fig.savefig(p.name)
+                        fig.clear()
+                        tf.add_tab(measure,InlineImageFragment(p.name))
                 builder.body().add_fragment(tf)
 
             table_measures = []
@@ -146,8 +147,9 @@ class ModelEvaluator:
                 for (idx,measure_values) in computed_measures:
                     cells = []
                     for target in plot_variables:
-                        save_image(ds[target][idx, 0, :, :], vmin, vmax, image_path, default_cmap)
-                        cells.append(InlineImageFragment(image_path,w=image_width))
+                        with tempfile.NamedTemporaryFile(suffix=".png") as p:
+                            save_image(ds[target][idx, 0, :, :], vmin, vmax, p.name, default_cmap)
+                            cells.append(InlineImageFragment(p.name,w=image_width))
 
                     for measure in table_measures:
                         cells.append("%0.3f"%measure_values[measure])
@@ -157,8 +159,9 @@ class ModelEvaluator:
                 for idx in range(n):
                     cells = []
                     for target in plot_variables:
-                        save_image(ds[target][idx, 0, :, :], vmin, vmax, image_path, default_cmap)
-                        cells.append(InlineImageFragment(image_path, w=image_width))
+                        with tempfile.NamedTemporaryFile(suffix=".png") as p:
+                            save_image(ds[target][idx, 0, :, :], vmin, vmax, p.name, default_cmap)
+                            cells.append(InlineImageFragment(p.name, w=image_width))
                     tbl.add_row(cells)
 
 
@@ -193,9 +196,10 @@ class ModelEvaluator:
 
             plot.set_title("history")
             fig = plot.get_figure()
-            fig.savefig(image_path)
-            fig.clear()
-            builder.body().add_fragment(InlineImageFragment(image_path, w=768))
+            with tempfile.NamedTemporaryFile(suffix=".png") as p:
+                fig.savefig(p.name)
+                fig.clear()
+                builder.body().add_fragment(InlineImageFragment(p.name, w=768))
 
         with open(self.output_html_path,"w") as f:
             f.write(builder.get_html())
