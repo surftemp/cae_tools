@@ -19,7 +19,7 @@ import numpy as np
 
 class DSDataset(torch.utils.data.Dataset):
 
-    def __init__(self, ds, input_variable_name, output_variable_name="", normalise_in=True, normalise_out=True):
+    def __init__(self, ds, input_variable_name, output_variable_name, normalise_in=True, normalise_out=True):
         self.ds = ds
         self.input_variable_name = input_variable_name
         self.output_variable_name = output_variable_name
