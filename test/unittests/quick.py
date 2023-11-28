@@ -15,40 +15,56 @@
 
 import unittest
 import os.path
+import sys
 
 from cae_tools.models.conv_ae_model import ConvAEModel
+from cae_tools.utils.evaluate import ModelEvaluator
 
-data_folder = os.path.join(os.path.split(__file__)[0],"..","data")
+data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
+
+
+results_root_folder = os.path.join(os.path.split(__file__)[0],"..","results")
 
 class QuickTest(unittest.TestCase):
 
     def test1(self):
-        test_name = "16x16_256x256"
-        train_path = os.path.join(data_folder, test_name, "train.nc")
-        test_path = os.path.join(data_folder,test_name,"test.nc")
-        mt = ConvAEModel(fc_size=8,encoded_dim_size=4,nr_epochs=500)
-        mt.train("lowres","hires",train_path,test_path)
-        mt.print_layer_summary()
-        mt.save("/tmp/test1")
+        input_variable = "lowres"
+        output_variable = "hires"
+        estimated_output_variable = "hires_estimate"
 
-        mt2 = ConvAEModel()
-        mt2.load("/tmp/test1")
-        mt2.print_layer_summary()
-        mt2.apply(train_path,"lowres","train_scores.nc","hires_estimate")
-        mt2.apply(test_path, "lowres","test_scores.nc","hires_estimate")
+        for test_spec in [((16,16),(256,256),"circle"),((16,16),(256,256),"curve"),((24,20),(280,256),"circle")]:
+            print("Running test:"+str(test_spec))
+            ((i_h, i_w), (o_h, o_w), pattern) = test_spec
+            folder = os.path.join(data_root_folder, pattern, f"{i_h}x{i_w}_{o_h}x{o_w}")
 
-    def test2(self):
-        test_name = "24x20_280x256"
-        train_path = os.path.join(data_folder, test_name, "train.nc")
-        test_path = os.path.join(data_folder, test_name, "test.nc")
-        mt = ConvAEModel(fc_size=8, encoded_dim_size=4, nr_epochs=500)
-        mt.train("lowres", "hires", train_path, test_path)
-        mt.print_layer_summary()
-        mt.save("/tmp/test2")
+            if not os.path.exists(folder):
+                print("No test data exists for this test.  Run script test/datagen/gen.py to generate the test data first")
+                continue
 
-        mt2 = ConvAEModel()
-        mt2.load("/tmp/test2")
-        mt2.print_layer_summary()
-        mt2.apply(train_path, "lowres", "train_scores.nc", "hires_estimate")
-        mt2.apply(test_path, "lowres", "test_scores.nc", "hires_estimate")
+            train_path = os.path.join(folder, "train.nc")
+            test_path = os.path.join(folder,"test.nc")
+            mt = ConvAEModel(fc_size=16,encoded_dim_size=4,nr_epochs=500)
+            mt.train(input_variable,output_variable,train_path,test_path)
+            print(mt.summary())
+
+            results_folder = os.path.join(results_root_folder, pattern, f"{i_h}x{i_w}_{o_h}x{o_w}")
+            print("Writing test results to: " + results_folder)
+            os.makedirs(results_folder,exist_ok=True)
+            model_path = os.path.join(results_folder,"model")
+            train_scores_path = os.path.join(results_folder, "train_scores.nc")
+            test_scores_path = os.path.join(results_folder, "test_scores.nc")
+            mt.save(model_path)
+
+            mt2 = ConvAEModel()
+            mt2.load(model_path)
+
+            mt2.apply(train_path,input_variable,train_scores_path,estimated_output_variable)
+            mt2.apply(test_path,input_variable,test_scores_path,estimated_output_variable)
+            evaluation_html_path = os.path.join(results_folder, "model_evaluation.html")
+
+            me = ModelEvaluator(train_scores_path,test_scores_path,input_variable,output_variable,evaluation_html_path,estimated_output_variable,model_path)
+            me.run()
+
+if __name__ == '__main__':
+    unittest.main()
 

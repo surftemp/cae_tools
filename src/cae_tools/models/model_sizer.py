@@ -26,7 +26,7 @@ class LayerSpec:
         self.output_padding_x = output_padding_x
 
     def __repr__(self):
-        s = "\tInputLayer:\n" if self.is_input else "\tOutputLayer:\n"
+        s = "\tInput Convolutional Layer:\n" if self.is_input else "\tOutput Convolutional Layer:\n"
         s += f"\t\tkernel_size={self.kernel_size}  stride={self.stride} output_padding=({self.output_padding_y},{self.output_padding_x})\n"
         s += f"\t\t{self.input_dimensions} => {self.output_dimensions}\n"
         return s
@@ -78,14 +78,6 @@ class ModelSpec:
 
     def get_output_layers(self):
         return self.output_layers
-
-    def __repr__(self):
-        s = "ModelSpec:\n"
-        for input_spec in self.input_layers:
-            s += str(input_spec)
-        for output_spec in self.output_layers:
-            s += str(output_spec)
-        return s
 
     def save(self):
         return {

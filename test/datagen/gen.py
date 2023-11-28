@@ -19,23 +19,33 @@ import numpy as np
 from scipy import ndimage
 import xarray as xr
 import random
+import math
 
 
 class DataGenerator:
 
     """Generate Test Data Patterns for ConvAEModel"""
 
-    def __init__(self, input_size, output_size):
+    def __init__(self, input_size, output_size, pattern="circle"):
         self.input_size = input_size
         self.output_size = output_size
+        self.pattern = pattern
 
     def gen(self,height,width,mu=1.0):
-        x, y = np.meshgrid(np.linspace(-3,3,height), np.linspace(-1,2,width))
-        d = np.sqrt(x*x+y*y)
-        sigma = 0.2
-        g = np.exp(-( (d-mu)**2 / ( 2.0 * sigma**2 ) ) )
-        g = ndimage.rotate(g,15)[0:height,0:width]
-        return g
+        if self.pattern == "circle":
+            x, y = np.meshgrid(np.linspace(-3,3,height), np.linspace(-2,2,width))
+            d = np.sqrt(x*x+y*y)
+            sigma = 0.2
+            g = np.exp(-( (d-mu)**2 / ( 2.0 * sigma**2 ) ) )
+            g = ndimage.rotate(g,15)[0:height,0:width]
+            return g
+        elif self.pattern == "curve":
+            x, y = np.meshgrid(np.linspace(0, 100, width),np.linspace(0, 100, height))
+            cx = 50
+            cy = 50
+            max_d = math.sqrt(50**2+50**2)
+            g = np.sqrt((x-cx)**2+(y-cy)**2)/max_d
+            return g
 
     def generate_data(self,n):
         arr1 = np.zeros((n,1,self.input_size[0],self.input_size[1]),dtype=np.float32)
@@ -55,30 +65,33 @@ class DataGenerator:
         return (da1,da2)
 
 
+def main():
+    import os
 
-import os
+    data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
 
-data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
+    for test_spec in [((16,16),(256,256),"circle"),((16,16),(256,256),"curve"),((24,20),(280,256),"circle")]:
 
-for test_size in [((24,20),(280,256))]:
+        ((i_h,i_w),(o_h,o_w), pattern) = test_spec
+        folder = os.path.join(data_root_folder,pattern,f"{i_h}x{i_w}_{o_h}x{o_w}")
 
-    ((i_h,i_w),(o_h,o_w)) = test_size
-    folder = os.path.join(data_root_folder,f"{i_h}x{i_w}_{o_h}x{o_w}")
+        if not os.path.exists(folder):
+            print("Generating test data:" + str(test_spec))
+            os.makedirs(folder)
 
-    os.makedirs(folder,exist_ok=True)
+            for filename in ["train.nc","test.nc"]:
 
-    for filename in ["train.nc","test.nc"]:
+                dg = DataGenerator((i_h,i_w),(o_h,o_w),pattern)
+                (input_da,output_da) = dg.generate_data(100)
 
-        dg = DataGenerator((i_h,i_w),(o_h,o_w))
-        (input_da,output_da) = dg.generate_data(100)
+                ds = xr.Dataset()
+                ds["hires"] = output_da
+                ds["lowres"] = input_da
+                path = os.path.join(folder,filename)
+                ds.to_netcdf(path)
+                print(f"Written {path}")
 
-        ds = xr.Dataset()
-        ds["hires"] = output_da
-        ds["lowres"] = input_da
-        path = os.path.join(folder,filename)
-        ds.to_netcdf(path)
-        print(f"Written {path}")
-
-
+if __name__ == '__main__':
+    main()
 
 

@@ -48,6 +48,7 @@ See source code for ConvAEModel for documentation
 ```python
 
 from cae_tools.models.conv_ae_model import ConvAEModel
+from cae_tools.utils.evaluate import ModelEvaluator
 
 train_path = "train.nc"
 test_path = "test.nc"
@@ -57,7 +58,7 @@ mt = ConvAEModel(fc_size=8, encoded_dim_size=4, nr_epochs=500)
 mt.train("lowres", "hires", train_path, test_path)
 
 # print a summary of the layers
-mt.print_layer_summary()
+print(mt.summary())
 
 # persist the model
 mt.save("/tmp/mymodel")
@@ -67,11 +68,21 @@ mt2 = ConvAEModel("lowres", "hires")
 mt2.load("/tmp/mymodel")
 mt2.apply(train_path, "lowres", "train_scores.nc", "hires_estimate")
 mt2.apply(test_path, "lowres", "test_scores.nc", "hires_estimate")
+
+# perform model evaluation, write results to evaluation_results.html
+me = ModelEvaluator("train_scores.nc","test_scores.nc","lowres","hires","evaluation_results.html","hires_estimate","/tmp/mymodel")
+me.run()
 ```
 
 ## Data formats
 
 input and output data needs to be 4-dimensional, organised by (N,channel,y,x)
+
+training and test data should be supplied in separate files.
+
+Example file format for training or test data
+
+[netcdf4 files for model train or test](test/data/circle/16x16_256x256)
 
 ## Example
 
@@ -103,3 +114,15 @@ Not all API options are available in the CLI tools `apply_cae` and `train_cae`
 * model retraining not tested
 * multiple channel input or output data not tested
 * not yet tested with a range of input/output geometries (especially non-square)
+
+To run all unit tests, first run the test data generator (only one set of synthetic data is stored in the repo)
+
+```
+python test/datagen/gen.py
+```
+
+Run unit tests using:
+
+```
+python tests/unittests/quick.py
+```

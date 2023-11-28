@@ -105,6 +105,10 @@ class ConvAEModel:
         with open(history_path, "w") as f:
             f.write(json.dumps(self.history))
 
+        summary_path = os.path.join(to_folder, "summary.txt")
+        with open(summary_path, "w") as f:
+            f.write(self.summary())
+
     def load(self, from_folder):
         """
         Load a model from disk
@@ -227,6 +231,7 @@ class ConvAEModel:
         train_transform = transforms.Compose([
             transforms.ToTensor(),
         ])
+
         test_transform = transforms.Compose([
             transforms.ToTensor(),
         ])
@@ -329,11 +334,22 @@ class ConvAEModel:
 
         score_ds.to_netcdf(output_path)
 
-    def print_layer_summary(self):
+    def summary(self):
         """
         Print a summary of the encoder/input and decoder/output layers
         """
         if self.spec:
-            print(self.spec)
+            s = "Model Summary:\n"
+            for input_spec in self.spec.input_layers:
+                s += str(input_spec)
+            s += "\tFully Connected Layer:\n"
+            s += f"\t\tsize={self.fc_size}\n"
+            s += "\tLatent Vector:\n"
+            s += f"\t\tsize={self.encoded_dim_size}\n"
+            s += "\tFully Connected Layer:\n"
+            s += f"\t\tsize={self.fc_size}\n"
+            for output_spec in self.spec.output_layers:
+                s += str(output_spec)
+            return s
         else:
-            print("Model has not been trained - no layers assigned yet")
+            return "Model has not been trained - no layers assigned yet"
