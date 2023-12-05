@@ -13,14 +13,13 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
-
 import numpy as np
 from scipy import ndimage
 import xarray as xr
 import random
 import math
 
+import test_specs
 
 class DataGenerator:
 
@@ -30,39 +29,73 @@ class DataGenerator:
         self.input_size = input_size
         self.output_size = output_size
         self.pattern = pattern
+        self.aux_data = {}
+        self.n = 0
 
-    def gen(self,height,width,mu=1.0):
+    @staticmethod
+    def lcm(n0, n1):
+        v0 = n0
+        v1 = n1
+        while True:
+            if v0 == v1:
+                return v0
+            elif v0 < v1:
+                v0 += n0
+            else:
+                v1 += n1
+
+    def gen(self,index,height,width,mu=1.0):
         if self.pattern == "circle":
-            x, y = np.meshgrid(np.linspace(-3,3,height), np.linspace(-2,2,width))
-            d = np.sqrt(x*x+y*y)
+            y, x = np.meshgrid(np.linspace(-2, 2, width), np.linspace(-3, 3, height))
+            d = np.sqrt(y * y + x * x)
             sigma = 0.2
+            g = np.exp(-((d - mu) ** 2 / (2.0 * sigma ** 2)))
+            return ndimage.rotate(g, 15)[0:height, 0:width]
+        elif self.pattern == "tidal_circle":
+            if "tide" not in self.aux_data:
+                self.aux_data["tide"] = np.zeros(shape=(self.n,),dtype=np.float32)
+            tidal_height = math.sin(random.random() * 2*math.pi)
+            self.aux_data["tide"][index] = tidal_height
+            y, x = np.meshgrid(np.linspace(-8,8,width),np.linspace(-10,10,height))
+            d = np.sqrt(y*y+x*x)
+            sigma = 0.2 + 0.1*tidal_height
             g = np.exp(-( (d-mu)**2 / ( 2.0 * sigma**2 ) ) )
-            g = ndimage.rotate(g,15)[0:height,0:width]
-            return g
+            return ndimage.rotate(g,15)[0:height,0:width]
         elif self.pattern == "curve":
-            x, y = np.meshgrid(np.linspace(0, 100, width),np.linspace(0, 100, height))
+            y, x = np.meshgrid(np.linspace(0, 100, width),np.linspace(0,100,height))
             cx = 50
             cy = 50
             max_d = math.sqrt(50**2+50**2)
-            g = np.sqrt((x-cx)**2+(y-cy)**2)/max_d
+            g = np.sqrt((y-cy)**2+(x-cx)**2)/max_d
             return g
 
     def generate_data(self,n):
-        arr1 = np.zeros((n,1,self.input_size[0],self.input_size[1]),dtype=np.float32)
+        self.n = n
+        self.aux_data = {}
         noise = [random.random() for i in range(n)]
 
+        sample_height = DataGenerator.lcm(self.output_size[0],self.input_size[0])
+        sample_width = DataGenerator.lcm(self.output_size[1], self.input_size[1])
+
+        sample_size = (sample_height,sample_width)
+
+        input_arr = np.zeros((n,1, self.input_size[0],self.input_size[1]),dtype=np.float32)
+        output_arr = np.zeros((n, 1, self.output_size[0], self.output_size[1]),dtype=np.float32)
+
         for i in range(n):
-            arr1[i,0,:,:] = 288+self.gen(self.input_size[0],self.input_size[1])*noise[i]*5
+            arr = 288 + self.gen(i,sample_size[0], sample_size[1]) * noise[i] * 5
+            das = xr.DataArray(data=arr, dims=("ys", "xs"))
+            input_arr[i,0,:,:] = das.coarsen({"ys":sample_height//self.input_size[0], "xs":sample_width//self.input_size[1]}).mean().values
+            output_arr[i,0,:,:] = das.coarsen({"ys":sample_height//self.output_size[0], "xs": sample_width//self.output_size[1]}).mean().values
+            print(str(100*(i/n))+"% complete")
 
-        da1 = xr.DataArray(data=arr1,dims=("n","chan","y1","x1"))
+        da1 = xr.DataArray(data=input_arr,dims=("n","chan","y1","x1")) # input
+        da2 = xr.DataArray(data=output_arr, dims=("n", "chan", "y2", "x2")) #output
+        aux_das = {}
+        for key in self.aux_data:
+            aux_das[key] = xr.DataArray(data=self.aux_data[key], dims=("n",))
 
-        arr2 = np.zeros((n, 1, self.output_size[0], self.output_size[1]), dtype=np.float32)
-        for i in range(n):
-            arr2[i, 0, :, :] = 288 + self.gen(self.output_size[0],self.output_size[1]) * noise[i] * 5
-
-        da2 = xr.DataArray(data=arr2, dims=("n", "chan", "y2", "x2"))
-
-        return (da1,da2)
+        return (da1,da2, aux_das)
 
 
 def main():
@@ -70,7 +103,7 @@ def main():
 
     data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
 
-    for test_spec in [((16,16),(256,256),"circle"),((16,16),(256,256),"curve"),((24,20),(280,256),"circle")]:
+    for test_spec in test_specs.all_specs:
 
         ((i_h,i_w),(o_h,o_w), pattern) = test_spec
         folder = os.path.join(data_root_folder,pattern,f"{i_h}x{i_w}_{o_h}x{o_w}")
@@ -82,11 +115,13 @@ def main():
             for filename in ["train.nc","test.nc"]:
 
                 dg = DataGenerator((i_h,i_w),(o_h,o_w),pattern)
-                (input_da,output_da) = dg.generate_data(100)
+                (input_da,output_da,aux_das) = dg.generate_data(100)
 
                 ds = xr.Dataset()
                 ds["hires"] = output_da
                 ds["lowres"] = input_da
+                for key in aux_das:
+                    ds[key] = aux_das[key]
                 path = os.path.join(folder,filename)
                 ds.to_netcdf(path)
                 print(f"Written {path}")
