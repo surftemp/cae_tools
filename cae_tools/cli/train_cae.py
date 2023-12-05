@@ -30,10 +30,13 @@ def main():
     parser.add_argument("--nr-epochs", type=int, help="number of training epochs", default=500)
     parser.add_argument("--latent-size", type=int, help="size of the latent space", default=4)
     parser.add_argument("--fc-size", type=int, help="size of the fully-connected layers", default=16)
+    parser.add_argument("--batch-size", type=int, help="number of images to process in one batch", default=10)
+    parser.add_argument("--learning-rate", type=float, help="controls the rate at which model weights are updated", default=0.001)
 
     args = parser.parse_args()
 
-    mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs)
+    mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
+                     batch_size=args.batch_size, lr=args.learning_rate)
     mt.train(args.input_variable, args.output_variable, args.training_path, args.test_path)
     mt.save(args.model_folder)
 
