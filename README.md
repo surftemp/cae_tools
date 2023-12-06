@@ -26,6 +26,15 @@ To train:
 train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variable=lowres --output-variable=hires --nr-epochs=500
 ```
 
+Useful training parameters:
+
+| Name | Description                                                                                      |
+|------|--------------------------------------------------------------------------------------------------|
+|--latent-size | size of the latent layer (compressed representation) in neurons, defaults to 4                   |
+ |--fc-size | size of the fully connected layers immediately before and after the latent layer, defaults to 16 |
+| --batch-size | size of each training batch, defaults to 10                                                      |
+| --learning-rate | the optimisers learning rate, defaults to 0.001                                                  |                                                                             
+
 To apply:
 
 ```
@@ -37,6 +46,12 @@ To evaluate:
 
 ```
 evaluate_cae train_scores.nc test_score.nc evaluation.html --input-variable lowres --output-variable hires --model-folder=/tmp/mymodel --prediction-variable hires_estimate
+```
+
+To retrain an existing model, use `--continue-training` (note that training parameters are reused from the model and cannot be set on the command line):
+
+```
+train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --continue-training --model-folder=/tmp/mymodel --input-variable=lowres --output-variable=hires --nr-epochs=500
 ```
 
 For help, run `train_cae --help` or `apply_cae --help`

@@ -30,6 +30,9 @@ class DataGenerator:
         self.output_size = output_size
         self.pattern = pattern
         self.aux_data = {}
+        self.aux_data_range = {}
+        if pattern == "tidal_circle":
+            self.aux_data_range["tide"] = (-1, 1)
         self.n = 0
 
     @staticmethod
@@ -93,7 +96,10 @@ class DataGenerator:
         da2 = xr.DataArray(data=output_arr, dims=("n", "chan", "y2", "x2")) #output
         aux_das = {}
         for key in self.aux_data:
-            aux_das[key] = xr.DataArray(data=self.aux_data[key], dims=("n",))
+            (range_min, range_max) = self.aux_data_range[key]
+            aux_das[key] = xr.DataArray(self.aux_data[key], dims=("n",),
+                                        attrs={"type": "auxilary-predictor",
+                                               "min-value": range_min, "max-value": range_max})
 
         return (da1,da2, aux_das)
 
@@ -108,9 +114,14 @@ def main():
         ((i_h,i_w),(o_h,o_w), pattern) = test_spec
         folder = os.path.join(data_root_folder,pattern,f"{i_h}x{i_w}_{o_h}x{o_w}")
 
-        if not os.path.exists(folder):
+        already_generated = True
+        for filename in ["train.nc", "test.nc"]:
+            if not os.path.exists(os.path.join(folder,filename)):
+                already_generated = False
+
+        if not already_generated:
             print("Generating test data:" + str(test_spec))
-            os.makedirs(folder)
+            os.makedirs(folder, exist_ok=True)
 
             for filename in ["train.nc","test.nc"]:
 

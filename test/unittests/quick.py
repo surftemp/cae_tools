@@ -36,6 +36,9 @@ class QuickTest(unittest.TestCase):
     def test_tidal(self):
         self.__run(((6,6),(256,256),"tidal_circle"))
 
+    def test_circle(self):
+        self.__run(((16,16),(256,256),"circle"))
+
     def __run(self,test_spec):
         input_variable = "lowres"
         output_variable = "hires"

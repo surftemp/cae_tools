@@ -61,7 +61,7 @@ class ConvAEModel:
         self.weight_decay = weight_decay
         self.use_gpu = use_gpu
         self.spec = None
-        self.history = {}
+        self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
         self.optim = None
 
     def save(self, to_folder):
@@ -83,7 +83,6 @@ class ConvAEModel:
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "batch_size": self.batch_size,
-            "nr_epochs": self.nr_epochs,
             "test_interval": self.test_interval,
             "encoded_dim_size": self.encoded_dim_size,
             "fc_size": self.fc_size,
@@ -124,7 +123,6 @@ class ConvAEModel:
             self.input_shape = tuple(parameters["input_shape"])
             self.output_shape = tuple(parameters["output_shape"])
             self.batch_size = parameters["batch_size"]
-            self.nr_epochs = parameters["nr_epochs"]
             self.test_interval = parameters["test_interval"]
             self.encoded_dim_size = parameters["encoded_dim_size"]
             self.fc_size = parameters["fc_size"]
@@ -222,11 +220,14 @@ class ConvAEModel:
         self.input_shape = (input_chan, input_y, input_x)
         self.output_shape = (output_chan, output_y, output_x)
 
-        self.spec = create_model_spec(input_size=(input_y, input_x), input_channels=input_chan,
+        if not self.spec:
+            self.spec = create_model_spec(input_size=(input_y, input_x), input_channels=input_chan,
                                  output_size=(output_y, output_x), output_channels=output_chan)
 
-        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        if not self.encoder:
+            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        if not self.decoder:
+            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
         train_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -239,8 +240,8 @@ class ConvAEModel:
         train_ds.transform = train_transform
         test_ds.transform = test_transform
 
-        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size)
-        test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size)
+        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
+        test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
 
         if self.use_gpu:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -263,8 +264,6 @@ class ConvAEModel:
         self.encoder.to(device)
         self.decoder.to(device)
 
-        self.history = {'train_loss': [], 'test_loss': []}
-
         train_batches = []
         for low_res, high_res, labels in train_loader:
             low_res = low_res.to(device)
@@ -278,6 +277,7 @@ class ConvAEModel:
             test_batches.append((low_res, high_res, labels))
 
         for epoch in range(self.nr_epochs):
+
             train_loss = self.__train_epoch(train_batches)
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
@@ -287,6 +287,8 @@ class ConvAEModel:
 
         end = time.time()
         elapsed = end - start
+
+        self.history['nr_epochs'] = self.history['nr_epochs'] + self.nr_epochs
 
         print("elapsed:" + str(elapsed))
 

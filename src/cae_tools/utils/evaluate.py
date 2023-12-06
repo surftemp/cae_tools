@@ -105,6 +105,13 @@ class ModelEvaluator:
         for (partition,path) in [("test",self.test_path),("train",self.train_path)]:
 
             ds = xr.open_dataset(path)
+
+            aux_inputs = []
+            for vname in ds.variables:
+                v = ds.variables[vname]
+                if v.attrs.get("type","") == "auxilary-predictor":
+                    aux_inputs.append(vname)
+
             builder.body().add_element("h3").add_text(partition)
 
             n = ds[self.input_variable].shape[0]
@@ -125,6 +132,7 @@ class ModelEvaluator:
                 computed_measures = sorted(computed_measures,key=lambda t:t[1][sort_measure],reverse=not sort_ascending)
 
             if computed_measures:
+                # draw histograms to show measure distributions
                 tf = TabbedFragment(partition+"_measures")
                 for measure in all_measures:
                     with tempfile.NamedTemporaryFile(suffix=".png") as p:
@@ -136,33 +144,30 @@ class ModelEvaluator:
                         fig.clear()
                         tf.add_tab(measure,InlineImageFragment(p.name))
                 builder.body().add_fragment(tf)
-
-            table_measures = []
-            if self.model_output_variable:
                 table_measures = ["mae"]
+            else:
+                # dummy computed measures
+                computed_measures = [(idx, {}) for idx in range(0, n)]
+                table_measures = []
+
 
             tbl = TableFragment()
-            tbl.add_row(plot_variables+table_measures)
-            if computed_measures:
-                for (idx,measure_values) in computed_measures:
-                    cells = []
-                    for target in plot_variables:
-                        with tempfile.NamedTemporaryFile(suffix=".png") as p:
-                            save_image(ds[target][idx, 0, :, :], vmin, vmax, p.name, default_cmap)
-                            cells.append(InlineImageFragment(p.name,w=image_width))
+            tbl.add_row(plot_variables+table_measures+aux_inputs)
 
-                    for measure in table_measures:
-                        cells.append("%0.3f"%measure_values[measure])
+            for (idx,measure_values) in computed_measures:
+                cells = []
+                for target in plot_variables:
+                    with tempfile.NamedTemporaryFile(suffix=".png") as p:
+                        save_image(ds[target][idx, 0, :, :], vmin, vmax, p.name, default_cmap)
+                        cells.append(InlineImageFragment(p.name,w=image_width))
 
-                    tbl.add_row(cells)
-            else:
-                for idx in range(n):
-                    cells = []
-                    for target in plot_variables:
-                        with tempfile.NamedTemporaryFile(suffix=".png") as p:
-                            save_image(ds[target][idx, 0, :, :], vmin, vmax, p.name, default_cmap)
-                            cells.append(InlineImageFragment(p.name, w=image_width))
-                    tbl.add_row(cells)
+                for measure in table_measures:
+                    cells.append("%0.3f"%measure_values[measure])
+
+                for aux_input in aux_inputs:
+                    cells.append("%0.3f"%float(ds[aux_input].values[idx]))
+
+                tbl.add_row(cells)
 
 
             builder.body().add_element("div", {"class": "exo-tree", "role": "tree"}).add_element("div", {
@@ -180,8 +185,13 @@ class ModelEvaluator:
 
             parameter_tbl = TableFragment()
             parameter_tbl.add_row(["Parameter Name", "Parameter Value"])
+            if training_losses:
+                nr_epochs = training_losses["nr_epochs"]
+                parameter_tbl.add_row(["total epochs", str(nr_epochs)])
+
             for (k,v) in training_parameters.items():
                 parameter_tbl.add_row([k,str(v)])
+
             builder.body().add_fragment(parameter_tbl)
 
         if training_losses:

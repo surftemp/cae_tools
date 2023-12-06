@@ -25,6 +25,7 @@ def main():
     parser.add_argument("training_path",help="path to netcdf4 file containing training data")
     parser.add_argument("test_path", help="path to netcdf4 file containing test data")
     parser.add_argument("--model-folder", help="folder to save the trained model to",required=True)
+    parser.add_argument("--continue-training", action="store_true", help="continue training model")
     parser.add_argument("--input-variable", help="name of the input variable in training/test data", default="input")
     parser.add_argument("--output-variable", help="name of the output variable in training/test data", default="output")
     parser.add_argument("--nr-epochs", type=int, help="number of training epochs", default=500)
@@ -35,7 +36,11 @@ def main():
 
     args = parser.parse_args()
 
-    mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
+    if args.continue_training:
+        mt = ConvAEModel()
+        mt.load(args.model_folder)
+    else:
+        mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                      batch_size=args.batch_size, lr=args.learning_rate)
     mt.train(args.input_variable, args.output_variable, args.training_path, args.test_path)
     mt.save(args.model_folder)
