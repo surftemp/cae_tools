@@ -32,7 +32,7 @@ class DataGenerator:
         self.aux_data = {}
         self.aux_data_range = {}
         if pattern == "tidal_circle":
-            self.aux_data_range["tide"] = (-1, 1)
+            self.aux_data_range["tide"] = (-1.0, 1.0)
         self.n = 0
 
     @staticmethod
@@ -101,18 +101,25 @@ class DataGenerator:
                                         attrs={"type": "auxilary-predictor",
                                                "min-value": range_min, "max-value": range_max})
 
-        return (da1,da2, aux_das)
+        return (da1,da2,aux_das)
 
 
 def main():
     import os
 
+    n = 100
     data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
 
-    for test_spec in test_specs.all_specs:
+    for test_spec_name in test_specs.all_specs:
 
-        ((i_h,i_w),(o_h,o_w), pattern) = test_spec
-        folder = os.path.join(data_root_folder,pattern,f"{i_h}x{i_w}_{o_h}x{o_w}")
+        test_spec = test_specs.all_specs[test_spec_name]
+        (i_h, i_w) = test_spec["input_size"]
+        (o_h,o_w) = test_spec["output_size"]
+        pattern = test_spec["pattern"]
+        input_names = test_spec["inputs"]
+        output_name = test_spec["output"]
+
+        folder = os.path.join(data_root_folder,test_spec_name,f"{i_h}x{i_w}_{o_h}x{o_w}")
 
         already_generated = True
         for filename in ["train.nc", "test.nc"]:
@@ -126,13 +133,18 @@ def main():
             for filename in ["train.nc","test.nc"]:
 
                 dg = DataGenerator((i_h,i_w),(o_h,o_w),pattern)
-                (input_da,output_da,aux_das) = dg.generate_data(100)
+                (input_da,output_da,aux_das) = dg.generate_data(n)
 
                 ds = xr.Dataset()
-                ds["hires"] = output_da
-                ds["lowres"] = input_da
+                ds[output_name] = output_da
+                ds[input_names[0]] = input_da
+                input_idx = 1
                 for key in aux_das:
-                    ds[key] = aux_das[key]
+                    ds[key+"_1d"] = aux_das[key]
+                    arr = np.zeros((n,1,i_h,i_w),dtype=np.float32)
+                    arr[:,:,:,:] = np.reshape(aux_das[key].data,newshape=(n,1,1,1))
+                    ds[input_names[input_idx]] = xr.DataArray(arr,dims=("n","chan","y1","x1"),attrs={})
+                    input_idx += 1
                 path = os.path.join(folder,filename)
                 ds.to_netcdf(path)
                 print(f"Written {path}")

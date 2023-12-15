@@ -23,7 +23,7 @@ pip install -e .
 To train:
 
 ```
-train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variable=lowres --output-variable=hires --nr-epochs=500
+train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variables lowres --output-variable=hires --nr-epochs=500
 ```
 
 Useful training parameters:
@@ -38,20 +38,20 @@ Useful training parameters:
 To apply:
 
 ```
-apply_cae test/data/16x16_256x256/train.nc train_scores.nc --model-folder=/tmp/mymodel  --input-variable=lowres --prediction-variable hires_estimate
-apply_cae test/data/16x16_256x256/test.nc test_scores.nc --model-folder=/tmp/mymodel  --input-variable=lowres --prediction-variable hires_estimate
+apply_cae test/data/16x16_256x256/train.nc train_scores.nc --model-folder=/tmp/mymodel  --input-variables lowres --prediction-variable hires_estimate
+apply_cae test/data/16x16_256x256/test.nc test_scores.nc --model-folder=/tmp/mymodel  --input-variables lowres --prediction-variable hires_estimate
 ```
 
 To evaluate:
 
 ```
-evaluate_cae train_scores.nc test_score.nc evaluation.html --input-variable lowres --output-variable hires --model-folder=/tmp/mymodel --prediction-variable hires_estimate
+evaluate_cae train_scores.nc test_score.nc evaluation.html --input-variables lowres --output-variable hires --model-folder=/tmp/mymodel --prediction-variable hires_estimate
 ```
 
 To retrain an existing model, use `--continue-training` (note that training parameters are reused from the model and cannot be set on the command line):
 
 ```
-train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --continue-training --model-folder=/tmp/mymodel --input-variable=lowres --output-variable=hires --nr-epochs=500
+train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --continue-training --model-folder=/tmp/mymodel --input-variables lowres --output-variable=hires --nr-epochs=500
 ```
 
 For help, run `train_cae --help` or `apply_cae --help`
@@ -70,7 +70,7 @@ test_path = "test.nc"
 
 # train the model to reconstruct variable "hires" from variable "lowres"
 mt = ConvAEModel(fc_size=8, encoded_dim_size=4, nr_epochs=500)
-mt.train("lowres", "hires", train_path, test_path)
+mt.train(["lowres"], "hires", train_path, test_path)
 
 # print a summary of the layers
 print(mt.summary())
@@ -79,13 +79,13 @@ print(mt.summary())
 mt.save("/tmp/mymodel")
 
 # now reload the trained model to create estimates of the "hires" variable from the train/test datasets
-mt2 = ConvAEModel("lowres", "hires")
+mt2 = ConvAEModel()
 mt2.load("/tmp/mymodel")
-mt2.apply(train_path, "lowres", "train_scores.nc", "hires_estimate")
-mt2.apply(test_path, "lowres", "test_scores.nc", "hires_estimate")
+mt2.apply(train_path, ["lowres"], "train_scores.nc", "hires_estimate")
+mt2.apply(test_path, ["lowres"], "test_scores.nc", "hires_estimate")
 
 # perform model evaluation, write results to evaluation_results.html
-me = ModelEvaluator("train_scores.nc","test_scores.nc","lowres","hires","evaluation_results.html","hires_estimate","/tmp/mymodel")
+me = ModelEvaluator("train_scores.nc","test_scores.nc",["lowres"],"hires","evaluation_results.html","hires_estimate","/tmp/mymodel")
 me.run()
 ```
 

@@ -28,23 +28,32 @@ results_root_folder = os.path.join(os.path.split(__file__)[0],"..","results")
 
 class QuickTest(unittest.TestCase):
 
-    def test_all(self):
-        for test_spec in test_specs.all_specs:
-            print("Running test:"+str(test_spec))
-            self.__run(test_spec)
+    # run selected tests
 
     def test_tidal(self):
-        self.__run(((6,6),(256,256),"tidal_circle"))
+        self.__run("tidal_circle1")
 
     def test_circle(self):
-        self.__run(((16,16),(256,256),"circle"))
+        self.__run("circle")
 
-    def __run(self,test_spec):
-        input_variable = "lowres"
-        output_variable = "hires"
-        estimated_output_variable = "hires_estimate"
-        ((i_h, i_w), (o_h, o_w), pattern) = test_spec
-        folder = os.path.join(data_root_folder, pattern, f"{i_h}x{i_w}_{o_h}x{o_w}")
+    # run all other tests
+
+    def test_others(self):
+        for test_spec_name in test_specs.all_specs:
+            if test_spec_name not in ["tidal_circle1","circle"]:
+                print("Running test:" + test_spec_name)
+                self.__run(test_spec_name)
+
+    def __run(self,test_spec_name):
+        test_spec = test_specs.all_specs[test_spec_name]
+        input_variables = test_spec["inputs"]
+        output_variable = test_spec["output"]
+        estimated_output_variable = test_spec["output"] + "_estimate"
+        (i_h, i_w) = test_spec["input_size"]
+        (o_h, o_w) = test_spec["output_size"]
+        hyperparameters = test_spec.get("hyperparameters",{})
+
+        folder = os.path.join(data_root_folder, test_spec_name, f"{i_h}x{i_w}_{o_h}x{o_w}")
 
         if not os.path.exists(folder):
             print("No test data exists for this test.  Run script test/datagen/gen.py to generate the test data first")
@@ -52,11 +61,11 @@ class QuickTest(unittest.TestCase):
 
         train_path = os.path.join(folder, "train.nc")
         test_path = os.path.join(folder, "test.nc")
-        mt = ConvAEModel(fc_size=16, encoded_dim_size=4, nr_epochs=500)
-        mt.train(input_variable, output_variable, train_path, test_path)
+        mt = ConvAEModel(**hyperparameters)
+        mt.train(input_variables, output_variable, train_path, test_path)
         print(mt.summary())
 
-        results_folder = os.path.join(results_root_folder, pattern, f"{i_h}x{i_w}_{o_h}x{o_w}")
+        results_folder = os.path.join(results_root_folder, test_spec_name, f"{i_h}x{i_w}_{o_h}x{o_w}")
         print("Writing test results to: " + results_folder)
         os.makedirs(results_folder, exist_ok=True)
         model_path = os.path.join(results_folder, "model")
@@ -67,11 +76,11 @@ class QuickTest(unittest.TestCase):
         mt2 = ConvAEModel()
         mt2.load(model_path)
 
-        mt2.apply(train_path, input_variable, train_scores_path, estimated_output_variable)
-        mt2.apply(test_path, input_variable, test_scores_path, estimated_output_variable)
+        mt2.apply(train_path, input_variables, train_scores_path, estimated_output_variable)
+        mt2.apply(test_path, input_variables, test_scores_path, estimated_output_variable)
         evaluation_html_path = os.path.join(results_folder, "model_evaluation.html")
 
-        me = ModelEvaluator(train_scores_path, test_scores_path, input_variable, output_variable, evaluation_html_path,
+        me = ModelEvaluator(train_scores_path, test_scores_path, input_variables[0:1], output_variable, evaluation_html_path,
                             estimated_output_variable, model_path)
         me.run()
 
