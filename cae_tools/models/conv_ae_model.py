@@ -199,19 +199,19 @@ class ConvAEModel:
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
                 ctr += self.batch_size
 
-    def train(self, input_variable, output_variable, training_path, test_path):
+    def train(self, input_variables, output_variable, training_path, test_path):
         """
         Train the model (or continue training)
 
-        :param input_variable: name of th input variable in training/test datasets
+        :param input_variables: names of th input variables in training/test datasets
         :param output_variable: name of the output variable in training/test datasets
         :param training_path: path to a netcdf4 file containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
         :param test_path: path to a netcdf4 file to use for testing only.  Format as above
         """
-        train_ds = DSDataset(xr.open_dataset(training_path), input_variable, output_variable,
+        train_ds = DSDataset(xr.open_dataset(training_path), input_variables, output_variable,
                              normalise_in=self.normalise_input, normalise_out=self.normalise_output)
         self.normalisation_parameters = train_ds.get_normalisation_parameters()
-        test_ds = DSDataset(xr.open_dataset(test_path), input_variable, output_variable,
+        test_ds = DSDataset(xr.open_dataset(test_path), input_variables, output_variable,
                             normalise_in=self.normalise_input, normalise_out=self.normalise_output)
         test_ds.set_normalisation_parameters(self.normalisation_parameters)
         (input_chan, input_y, input_x) = train_ds.get_input_shape()
@@ -292,13 +292,13 @@ class ConvAEModel:
 
         print("elapsed:" + str(elapsed))
 
-    def apply(self, input_path, input_variable, output_path, prediction_variable="model_output",
+    def apply(self, input_path, input_variables, output_path, prediction_variable="model_output",
                 channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
         """
         Apply this model to input data to produce an output estimate
 
         :param input_path: path to a netcdf4 file containing input data
-        :param input_variable: name of the input variable in the input data
+        :param input_variables: name of the input variables in the input data
         :param output_path: path to a netcdf4 file to write containing the input data plus a prediction variable
         :param prediction_variable: the name of the prediction variable
         :param channel_dimension: the name of the channel dimension in the prediction variable
@@ -306,14 +306,14 @@ class ConvAEModel:
         :param x_dimension: the name of the x dimension in the prediction variable
         """
         score_ds = xr.open_dataset(input_path)
-        n = score_ds[input_variable].shape[0]
-        n_dimension = score_ds[input_variable].dims[0]
+        n = score_ds[input_variables[0]].shape[0]
+        n_dimension = score_ds[input_variables[0]].dims[0]
         out_chan = self.output_shape[0]
         out_y = self.output_shape[1]
         out_x = self.output_shape[2]
         score_arr = np.zeros(shape=(n,out_chan,out_y,out_x))
 
-        ds = DSDataset(score_ds, input_variable, input_variable, normalise_in=self.normalise_input)
+        ds = DSDataset(score_ds, input_variables, input_variables[0], normalise_in=self.normalise_input)
         ds.set_normalisation_parameters(self.normalisation_parameters)
         val_loader = torch.utils.data.DataLoader(ds, batch_size=self.batch_size)
 

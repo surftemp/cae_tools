@@ -19,37 +19,49 @@ import numpy as np
 
 class DSDataset(torch.utils.data.Dataset):
 
-    def __init__(self, ds, input_variable_name, output_variable_name, normalise_in=True, normalise_out=True):
+    def __init__(self, ds, input_variable_names, output_variable_name=None, normalise_in=True, normalise_out=True):
         self.ds = ds
-        self.input_variable_name = input_variable_name
+        self.input_variable_names = input_variable_names
         self.output_variable_name = output_variable_name
         self.normalise_in = normalise_in
         self.normalise_out = normalise_out
 
-        self.input_da = self.ds[self.input_variable_name]
+        self.input_das = [self.ds[input_variable_name] for input_variable_name in input_variable_names]
 
-        self.n = self.input_da.shape[0]
-        self.input_chan = self.input_da.shape[1]
-        self.input_y = self.input_da.shape[2]
-        self.input_x = self.input_da.shape[3]
+        self.n = self.input_das[0].shape[0]
+        self.input_chan = sum(input_da.shape[1] for input_da in self.input_das)
+        self.input_y = self.input_das[0].shape[2]
+        self.input_x = self.input_das[0].shape[3]
 
         # get the min/max for normalisation
-        self.min_input = float(np.min(self.input_da.values))
-        self.max_input = float(np.max(self.input_da.values))
+        self.min_inputs = {}
+        self.max_inputs = {}
+        for idx in range(len(self.input_variable_names)):
+            input_name = self.input_variable_names[idx]
+            input_da = self.input_das[idx]
+            self.min_inputs[input_name] = float(np.min(input_da.values))
+            self.max_inputs[input_name] = float(np.max(input_da.values))
 
-        self.output_da = self.ds[self.output_variable_name]
-        self.output_chan = self.output_da.shape[1]
-        self.output_y = self.output_da.shape[2]
-        self.output_x = self.output_da.shape[3]
-
-        self.min_output = float(np.min(self.output_da.values))
-        self.max_output = float(np.max(self.output_da.values))
+        if self.output_variable_name:
+            self.output_da = self.ds[self.output_variable_name]
+            self.output_chan = self.output_da.shape[1]
+            self.output_y = self.output_da.shape[2]
+            self.output_x = self.output_da.shape[3]
+            self.min_output = float(np.min(self.output_da.values))
+            self.max_output = float(np.max(self.output_da.values))
+        else:
+            self.output_da = None
+            self.output_chan = None
+            self.output_y = None
+            self.output_x = None
+            self.min_output = None
+            self.max_output = None
 
     def get_normalisation_parameters(self):
-        return [self.min_input, self.max_input, self.min_output, self.max_output]
+        return [self.min_inputs, self.max_inputs, self.min_output, self.max_output]
 
     def set_normalisation_parameters(self, parameters):
-        (self.min_input, self.max_input, self.min_output, self.max_output) = tuple(parameters)
+        (self.min_inputs, self.max_inputs, self.min_output, self.max_output) = tuple(parameters)
 
     def get_input_shape(self):
         return (self.input_chan, self.input_y, self.input_x)
@@ -57,9 +69,9 @@ class DSDataset(torch.utils.data.Dataset):
     def get_output_shape(self):
         return (self.output_chan, self.output_y, self.output_x)
 
-    def normalise_input(self, arr):
+    def normalise_input(self, arr, input_name):
         if self.normalise_in:
-            return (arr - self.min_input) / (self.max_input - self.min_input)
+            return (arr - self.min_inputs[input_name]) / (self.max_inputs[input_name] - self.min_inputs[input_name])
         else:
             return arr
 
@@ -71,7 +83,17 @@ class DSDataset(torch.utils.data.Dataset):
 
     def denormalise_input(self, arr):
         if self.normalise_in:
-            return self.min_input + (arr * (self.max_input - self.min_input))
+            norm_arr = np.zeros(arr.shape, dtype=np.float32)
+            channel_index = 0
+
+            for idx in range(len(self.input_variable_names)):
+                input_name = self.input_variable_names[idx]
+                nchan = self.input_das[idx].shape[1]
+                norm_arr[:, channel_index:channel_index + nchan, :, :] = \
+                    self.min_inputs[input_name] + \
+                        (arr[:, channel_index:channel_index + nchan, :,:] * \
+                        (self.max_inputs[input_name] - self.min_inputs[input_name]))
+            return norm_arr
         else:
             return arr
 
@@ -83,8 +105,19 @@ class DSDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         label = f"image{index}"
-        in_arr = self.normalise_input(self.input_da[index, :, :, :].values)
-        out_arr = self.normalise_output(self.output_da[index, :, :, :].values)
+        in_arr = np.zeros((self.input_chan,self.input_y,self.input_x), dtype=np.float32)
+        channel_index = 0
+
+        for idx in range(len(self.input_variable_names)):
+            input_name = self.input_variable_names[idx]
+            nchan = self.input_das[idx].shape[1]
+            in_arr[channel_index:channel_index + nchan, :, :] = self.normalise_input(self.input_das[idx].data[index,:,:,:],input_name)
+            channel_index += nchan
+
+        if self.output_da is not None:
+            out_arr = self.normalise_output(self.output_da[index, :, :, :].values)
+        else:
+            out_arr = None
         return (in_arr, out_arr, label)
 
     def __len__(self):

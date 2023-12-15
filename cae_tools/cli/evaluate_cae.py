@@ -26,8 +26,8 @@ def main():
     parser.add_argument("test_path", help="path to netcdf4 file containing test data")
     parser.add_argument("output_html_path", help="path to write output html to")
 
-    parser.add_argument("--input-variable", help="name of the input variable in training/test data", default="input")
-    parser.add_argument("--output-variable", help="name of the output variable in training/test data", default="output")
+    parser.add_argument("--input-variables", nargs="+", help="name of the input variable(s) in training/test data", required=True)
+    parser.add_argument("--output-variable", help="name of the output variable in training/test data", required=True)
 
     parser.add_argument("--model-folder", help="folder to save the trained model to", default="")
     parser.add_argument("--prediction-variable", help="name of the prediction variable to create in output data",
@@ -37,7 +37,7 @@ def main():
 
     mt = ModelEvaluator(train_path=args.training_path,
                         test_path=args.test_path,
-                        input_variable=args.input_variable,
+                        input_variables=args.input_variables,
                         output_variable=args.output_variable,
                         output_html_path=args.output_html_path,
                         model_path=args.model_folder,

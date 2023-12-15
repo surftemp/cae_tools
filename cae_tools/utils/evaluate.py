@@ -47,10 +47,10 @@ def save_image(arr,vmin,vmax,path,cmap_name):
 
 class ModelEvaluator:
 
-    def __init__(self, train_path, test_path, input_variable, output_variable, output_html_path, model_output_variable="", model_path=""):
+    def __init__(self, train_path, test_path, input_variables, output_variable, output_html_path, model_output_variable="", model_path=""):
         self.train_path = train_path
         self.test_path = test_path
-        self.input_variable = input_variable
+        self.input_variables = input_variables
         self.output_variable = output_variable
         self.output_html_path = output_html_path
         self.model_path = model_path
@@ -83,7 +83,7 @@ class ModelEvaluator:
                 training_parameters = json.loads(f.read())
 
 
-        plot_variables = [self.input_variable,self.output_variable]
+        plot_variables = self.input_variables+[self.output_variable]
         if self.model_output_variable:
             plot_variables.append(self.model_output_variable)
 
@@ -114,7 +114,7 @@ class ModelEvaluator:
 
             builder.body().add_element("h3").add_text(partition)
 
-            n = ds[self.input_variable].shape[0]
+            n = ds[self.input_variables[0]].shape[0]
 
             default_cmap = "coolwarm"
 
