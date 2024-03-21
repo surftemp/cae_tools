@@ -206,6 +206,7 @@ class VarAEModel:
         self.encoder.eval()
         self.decoder.eval()
         with torch.no_grad():
+            ctr = 0
             for (low_res, high_res, labels) in batches:
                 mu, log_var = self.encoder(low_res)
                 z = self.reparameterize(mu, log_var)
