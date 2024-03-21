@@ -43,7 +43,7 @@ from .ds_dataset import DSDataset
 from .encoder import VAE_Encoder
 from .decoder import Decoder
 
-class ConvAEModel:
+class VarAEModel:
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
