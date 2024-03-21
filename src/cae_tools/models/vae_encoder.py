@@ -38,7 +38,8 @@ class VAE_Encoder(nn.Module):
         # Linear layers
         (chan, y, x) = layers[-1].get_output_dimensions()
         self.encoder_fc = nn.Linear(chan * y * x, fc_size)
-        self.fc_relu = nn.ReLU(True)
+        # self.fc_relu = nn.ReLU(True)
+        self.fc_relu = nn.LeakyReLU(negative_slope=0.01)        
 
         # Output layers for mu and logvar
         self.fc_mu = nn.Linear(fc_size, encoded_space_dim)
