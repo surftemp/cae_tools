@@ -196,6 +196,13 @@ class ConvAEModel:
             for input_data in batches:
                 encoded_data = self.encoder(input_data)
                 decoded_data = self.decoder(encoded_data)
+                # Convert to CPU and then to NumPy for inspection
+                encoded_data_np = encoded_data.cpu().numpy()
+                decoded_data_np = decoded_data.cpu().numpy()
+
+                # Debugging: Print or inspect these variables
+                # print("encoded_data_np:", encoded_data_np)
+                # print("decoded_data:", decoded_data_np)                   
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
                 ctr += self.batch_size
 
@@ -306,6 +313,9 @@ class ConvAEModel:
         :param x_dimension: the name of the x dimension in the prediction variable
         """
         score_ds = xr.open_dataset(input_path)
+        # print("Input variables:", score_ds)
+        # print("First item in input_variables:", input_variables[0])
+
         n = score_ds[input_variables[0]].shape[0]
         n_dimension = score_ds[input_variables[0]].dims[0]
         out_chan = self.output_shape[0]
