@@ -39,16 +39,16 @@ class DSDataset(torch.utils.data.Dataset):
         for idx in range(len(self.input_variable_names)):
             input_name = self.input_variable_names[idx]
             input_da = self.input_das[idx]
-            self.min_inputs[input_name] = float(np.min(input_da.values))
-            self.max_inputs[input_name] = float(np.max(input_da.values))
+            self.min_inputs[input_name] = float(np.nanmin(input_da.values))
+            self.max_inputs[input_name] = float(np.nanmax(input_da.values))
 
         if self.output_variable_name:
             self.output_da = self.ds[self.output_variable_name]
             self.output_chan = self.output_da.shape[1]
             self.output_y = self.output_da.shape[2]
             self.output_x = self.output_da.shape[3]
-            self.min_output = float(np.min(self.output_da.values))
-            self.max_output = float(np.max(self.output_da.values))
+            self.min_output = float(np.nanmin(self.output_da.values))
+            self.max_output = float(np.nanmax(self.output_da.values))
         else:
             self.output_da = None
             self.output_chan = None
