@@ -33,6 +33,12 @@ class DSDataset(torch.utils.data.Dataset):
         self.input_y = self.input_das[0].shape[2]
         self.input_x = self.input_das[0].shape[3]
 
+        # check for NaN
+        da = self.ds[self.output_variable_name]
+        count_nans = np.sum(np.where(np.isnan(da.values),1,0))
+        if count_nans > 0:
+            raise ValueError(f"output variable contains {count_nans} NaN values")
+
         # get the min/max for normalisation
         self.min_inputs = {}
         self.max_inputs = {}
@@ -41,6 +47,9 @@ class DSDataset(torch.utils.data.Dataset):
             input_da = self.input_das[idx]
             self.min_inputs[input_name] = float(np.nanmin(input_da.values))
             self.max_inputs[input_name] = float(np.nanmax(input_da.values))
+            count_nans = np.sum(np.where(np.isnan(input_da.values), 1, 0))
+            if count_nans > 0:
+                raise ValueError(f"input variable {input_name} contains {count_nans} NaN values")
 
         if self.output_variable_name:
             self.output_da = self.ds[self.output_variable_name]
