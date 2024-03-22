@@ -15,6 +15,8 @@
 
 import torch
 from torch import nn
+import torch.nn.init as init
+
 
 class VAE_Encoder(nn.Module):
 
@@ -44,6 +46,25 @@ class VAE_Encoder(nn.Module):
         # Output layers for mu and logvar
         self.fc_mu = nn.Linear(fc_size, encoded_space_dim)
         self.fc_logvar = nn.Linear(fc_size, encoded_space_dim)
+
+        # Initialize weights
+        self._initialize_weights()
+
+    # Weights initialization using Kaiming initialization 
+    def _initialize_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.Linear):
+                init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='leaky_relu')
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.BatchNorm2d):
+                init.constant_(module.weight, 1)
+                init.constant_(module.bias, 0)           
+     
 
     def forward(self, x):
         x = self.encoder_cnn(x)
