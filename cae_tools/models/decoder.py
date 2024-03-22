@@ -15,6 +15,8 @@
 
 import torch
 from torch import nn
+import torch.nn.init as init
+
 
 
 class Decoder(nn.Module):
@@ -23,6 +25,8 @@ class Decoder(nn.Module):
         super().__init__()
 
         (chan, y, x) = layers[0].get_input_dimensions()
+        # Unpacking and setting as instance attributes
+        (self.chan, self.y, self.x) = layers[0].get_input_dimensions()
 
         self.decoder_lin = nn.Sequential(
             nn.Linear(encoded_space_dim, fc_size),
@@ -44,6 +48,27 @@ class Decoder(nn.Module):
                 decoder_layers.append(nn.ReLU(True))
 
         self.decoder_conv = nn.Sequential(*decoder_layers)
+
+        self._initialize_weights()        
+
+
+    def _initialize_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.ConvTranspose2d):
+                init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.Linear):
+                # For the last Linear layer use Xavier if it is followed by a Sigmoid
+                if module.out_features == self.chan * self.y * self.x: 
+                    init.xavier_normal_(module.weight)
+                else:
+                    init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.BatchNorm2d):
+                init.constant_(module.weight, 1)
+                init.constant_(module.bias, 0)        
 
     def forward(self, x):
         x = self.decoder_lin(x)
