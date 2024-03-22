@@ -1,8 +1,9 @@
 import argparse
+import json
 
 from cae_tools.models.conv_ae_model import ConvAEModel
 from cae_tools.models.var_ae_model import VarAEModel
-
+from cae_tools.models.model_sizer import ModelSpec
 
 def main():
 
@@ -20,7 +21,7 @@ def main():
     parser.add_argument("--batch-size", type=int, help="number of images to process in one batch", default=10)
     parser.add_argument("--learning-rate", type=float, help="controls the rate at which model weights are updated", default=0.001)
     parser.add_argument("--method", choices=["conv", "var"], required=True, help="model training method: 'conv' for ConvAEModel or 'var' for VarAEModel")
-
+    parser.add_argument("--layer-definitions-path", help="specify path of a JSON file with layer definitions", default=None)
 
     args = parser.parse_args()
 
@@ -37,5 +38,13 @@ def main():
         elif args.method == "var":
             mt = VarAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                         batch_size=args.batch_size, lr=args.learning_rate)
+
+        # if specified, use the encoder/decoder layer specifications
+        if args.layer_definitions_path:
+            with open(args.layer_definitions_path) as f:
+                spec = ModelSpec()
+                spec.load(json.loads(f.read()))
+                mt.spec = spec
+
     mt.train(args.input_variables, args.output_variable, args.training_path, args.test_path)
     mt.save(args.model_folder)
