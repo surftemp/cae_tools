@@ -106,11 +106,13 @@ def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28),
     channels = input_channels
     input_layers = []
 
-    while min(size) > limit:
+    while True:
         (size_y, size_x) = size
         input_dims = (int(channels), int(size_y), int(size_x))
         size_x = ((size_x - (kernel_size - 1) - 1) // stride) + 1
         size_y = ((size_y - (kernel_size - 1) - 1) // stride) + 1
+        if min(size_x,size_y) < limit:
+            break
         channels *= 2
         output_dims = (int(channels), int(size_y), int(size_x))
         input_layers.append(LayerSpec(True, kernel_size, stride, input_dims, output_dims))
