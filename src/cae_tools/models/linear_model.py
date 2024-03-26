@@ -72,6 +72,7 @@ class LinearModel:
             f.write(json.dumps(self.normalisation_parameters))
 
         parameters = {
+            "type": "LinearModel",
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "batch_size": self.batch_size,
