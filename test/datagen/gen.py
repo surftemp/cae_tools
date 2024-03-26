@@ -75,7 +75,6 @@ class DataGenerator:
     def generate_data(self,n):
         self.n = n
         self.aux_data = {}
-        noise = [random.random() for i in range(n)]
 
         sample_height = DataGenerator.lcm(self.output_size[0],self.input_size[0])
         sample_width = DataGenerator.lcm(self.output_size[1], self.input_size[1])
@@ -86,7 +85,7 @@ class DataGenerator:
         output_arr = np.zeros((n, 1, self.output_size[0], self.output_size[1]),dtype=np.float32)
 
         for i in range(n):
-            arr = 288 + self.gen(i,sample_size[0], sample_size[1]) * noise[i] * 5
+            arr = 288 + 5 * random.random() + self.gen(i,sample_size[0], sample_size[1]) * random.random() * 5
             das = xr.DataArray(data=arr, dims=("ys", "xs"))
             input_arr[i,0,:,:] = das.coarsen({"ys":sample_height//self.input_size[0], "xs":sample_width//self.input_size[1]}).mean().values
             output_arr[i,0,:,:] = das.coarsen({"ys":sample_height//self.output_size[0], "xs": sample_width//self.output_size[1]}).mean().values

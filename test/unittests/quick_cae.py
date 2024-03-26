@@ -24,7 +24,7 @@ import test_specs
 data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
 
 
-results_root_folder = os.path.join(os.path.split(__file__)[0],"..","results")
+results_root_folder = os.path.join(os.path.split(__file__)[0],"..","results","cae_quick")
 
 class QuickTest(unittest.TestCase):
 

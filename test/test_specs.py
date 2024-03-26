@@ -22,7 +22,7 @@ all_specs = {
     "curve1": {
         "input_size": (16,16),
         "output_size": (256,256),
-        "inputs": ["lowres","tide_3d"],
+        "inputs": ["lowres"],
         "output": "hires",
         "pattern": "curve"
     },

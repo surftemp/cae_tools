@@ -23,8 +23,9 @@ pip install -e .
 To train:
 
 ```
-train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variables lowres --output-variable=hires --nr-epochs=500
+train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variables lowres --output-variable=hires --nr-epochs=500 --method conv       
 ```
+method options are "conv" or "var" for convolutional autoencder or variational autoencoder
 
 Useful training parameters:
 

@@ -22,26 +22,22 @@ import json
 import os
 import time
 
-from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
-from .encoder import Encoder
-from .decoder import Decoder
+from .linear import Linear
 
-class ConvAEModel:
+class LinearModel:
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
-                 nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
+                 nr_epochs=500, test_interval=10,
                  lr=0.001, weight_decay=1e-5, use_gpu=True):
         """
-        Create a convolutional autoencoder general model
+        Create a simple linear model
 
         :param normalise_input: whether the input variable should be normalised
         :param normalise_output: whether the output variable should be normalised
         :param batch_size: batch size for training
         :param nr_epochs: number of iterations for training
         :param test_interval: calculate test statistics every this many iterations
-        :param encoded_dim_size: size of the latent encoding, in neurons
-        :param fc_size: size of the fully connected layers that connect the latent layer to encoder and decoder stages
         :param lr: learning rate
         :param weight_decay: weight decay?
         :param use_gpu: use GPU if present
@@ -51,16 +47,13 @@ class ConvAEModel:
         self.normalise_output = normalise_output
         self.normalisation_parameters = None
         self.input_shape = self.output_shape = None
-        self.encoder = self.decoder = None
+        self.weights = None
         self.batch_size = batch_size
         self.nr_epochs = nr_epochs
         self.test_interval = test_interval
-        self.encoded_dim_size = encoded_dim_size
-        self.fc_size = fc_size
         self.lr = lr
         self.weight_decay = weight_decay
         self.use_gpu = use_gpu
-        self.spec = None
         self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
         self.optim = None
 
@@ -71,10 +64,9 @@ class ConvAEModel:
         :param to_folder: folder to which model files are to be saved
         """
         os.makedirs(to_folder, exist_ok=True)
-        encoder_path = os.path.join(to_folder, "encoder.weights")
-        torch.save(self.encoder.state_dict(), encoder_path)
-        decoder_path = os.path.join(to_folder, "decoder.weights")
-        torch.save(self.decoder.state_dict(), decoder_path)
+        weights_path = os.path.join(to_folder, "weights")
+        torch.save(self.weights.state_dict(), weights_path)
+
         normalisation_path = os.path.join(to_folder, "normalisation.weights")
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
@@ -84,8 +76,6 @@ class ConvAEModel:
             "output_shape": list(self.output_shape),
             "batch_size": self.batch_size,
             "test_interval": self.test_interval,
-            "encoded_dim_size": self.encoded_dim_size,
-            "fc_size": self.fc_size,
             "lr": self.lr,
             "weight_decay": self.weight_decay,
             "normalise_input": self.normalise_input,
@@ -95,10 +85,6 @@ class ConvAEModel:
         parameters_path = os.path.join(to_folder, "parameters.json")
         with open(parameters_path, "w") as f:
             f.write(json.dumps(parameters))
-
-        spec_path = os.path.join(to_folder, "spec.json")
-        with open(spec_path, "w") as f:
-            f.write(json.dumps(self.spec.save()))
 
         history_path = os.path.join(to_folder, "history.json")
         with open(history_path, "w") as f:
@@ -117,6 +103,7 @@ class ConvAEModel:
         normalisation_path = os.path.join(from_folder, "normalisation.weights")
         with open(normalisation_path, "r") as f:
             self.normalisation_parameters = json.loads(f.read())
+
         parameters_path = os.path.join(from_folder, "parameters.json")
         with open(parameters_path) as f:
             parameters = json.loads(f.read())
@@ -124,8 +111,6 @@ class ConvAEModel:
             self.output_shape = tuple(parameters["output_shape"])
             self.batch_size = parameters["batch_size"]
             self.test_interval = parameters["test_interval"]
-            self.encoded_dim_size = parameters["encoded_dim_size"]
-            self.fc_size = parameters["fc_size"]
             self.lr = parameters["lr"]
             self.weight_decay = parameters["weight_decay"]
             self.normalise_input = parameters["normalise_input"]
@@ -135,30 +120,21 @@ class ConvAEModel:
         with open(history_path) as f:
             self.history = json.loads(f.read())
 
-        spec_path = os.path.join(from_folder, "spec.json")
-        with open(spec_path) as f:
-            self.spec = ModelSpec()
-            self.spec.load(json.loads(f.read()))
+        self.weights = Linear(self.input_shape,self.output_shape)
 
-        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        weights_path = os.path.join(from_folder, "weights")
+        self.weights.load_state_dict(torch.load(weights_path))
+        self.weights.eval()
 
-        encoder_path = os.path.join(from_folder, "encoder.weights")
-        self.encoder.load_state_dict(torch.load(encoder_path))
-        self.encoder.eval()
-        decoder_path = os.path.join(from_folder, "decoder.weights")
-        self.decoder.load_state_dict(torch.load(decoder_path))
-        self.decoder.eval()
 
     def __train_epoch(self, batches):
-        self.encoder.train()
-        self.decoder.train()
+        self.weights.train()
+
         train_loss = []
         for (low_res, high_res, labels) in batches:
             # Encode data
-            encoded_data = self.encoder(low_res)
-            decoded_data = self.decoder(encoded_data)
-            loss = self.loss_fn(decoded_data, high_res)
+            estimates = self.weights(low_res)
+            loss = self.loss_fn(estimates, high_res)
             # Backward pass
             self.optim.zero_grad()
             loss.backward()
@@ -172,38 +148,27 @@ class ConvAEModel:
 
     def __test_epoch(self, batches, save_arr=None):
         test_loss = []
-        self.encoder.eval()
-        self.decoder.eval()
+        self.weights.eval()
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for (low_res, high_res, labels) in batches:
                 # Encode data
-                encoded_data = self.encoder(low_res)
-                decoded_data = self.decoder(encoded_data)
-                loss = self.loss_fn(decoded_data, high_res)
+                estimates = self.weights(low_res)
+                loss = self.loss_fn(estimates, high_res)
                 test_loss.append(loss.detach().cpu().numpy())
                 if save_arr is not None:
-                    save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
+                    save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
                 ctr += self.batch_size
         mean_loss = np.mean(test_loss)
         return float(mean_loss)
 
     def __score(self, batches, save_arr):
-        self.encoder.eval()
-        self.decoder.eval()
+        self.weights.eval()
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for input_data in batches:
-                encoded_data = self.encoder(input_data)
-                decoded_data = self.decoder(encoded_data)
-                # Convert to CPU and then to NumPy for inspection
-                encoded_data_np = encoded_data.cpu().numpy()
-                decoded_data_np = decoded_data.cpu().numpy()
-
-                # Debugging: Print or inspect these variables
-                # print("encoded_data_np:", encoded_data_np)
-                # print("decoded_data:", decoded_data_np)                   
-                save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
+                estimates = self.weights(input_data)
+                save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
                 ctr += self.batch_size
 
     def train(self, input_variables, output_variable, training_path, test_path):
@@ -227,14 +192,8 @@ class ConvAEModel:
         self.input_shape = (input_chan, input_y, input_x)
         self.output_shape = (output_chan, output_y, output_x)
 
-        if not self.spec:
-            self.spec = create_model_spec(input_size=(input_y, input_x), input_channels=input_chan,
-                                 output_size=(output_y, output_x), output_channels=output_chan)
-
-        if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        if not self.weights:
+            self.weights = Linear(self.input_shape, self.output_shape)
 
         train_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -262,14 +221,12 @@ class ConvAEModel:
         self.loss_fn = torch.nn.MSELoss()
 
         params_to_optimize = [
-            {'params': self.encoder.parameters()},
-            {'params': self.decoder.parameters()}
+            {'params': self.weights.parameters()}
         ]
 
         self.optim = torch.optim.Adam(params_to_optimize, lr=self.lr, weight_decay=self.weight_decay)
 
-        self.encoder.to(device)
-        self.decoder.to(device)
+        self.weights.to(device)
 
         train_batches = []
         for low_res, high_res, labels in train_loader:
@@ -313,9 +270,6 @@ class ConvAEModel:
         :param x_dimension: the name of the x dimension in the prediction variable
         """
         score_ds = xr.open_dataset(input_path)
-        # print("Input variables:", score_ds)
-        # print("First item in input_variables:", input_variables[0])
-
         n = score_ds[input_variables[0]].shape[0]
         n_dimension = score_ds[input_variables[0]].dims[0]
         out_chan = self.output_shape[0]
@@ -332,8 +286,7 @@ class ConvAEModel:
         else:
             device = torch.device("cpu")
 
-        self.encoder.to(device)
-        self.decoder.to(device)
+        self.weights.to(device)
 
         score_batches = []
         for low_res, _, _ in val_loader:
@@ -348,20 +301,14 @@ class ConvAEModel:
 
     def summary(self):
         """
-        Print a summary of the encoder/input and decoder/output layers
+        Print a summary of the model
         """
-        if self.spec:
+        if self.input_shape:
             s = "Model Summary:\n"
-            for input_spec in self.spec.input_layers:
-                s += str(input_spec)
-            s += "\tFully Connected Layer:\n"
-            s += f"\t\tsize={self.fc_size}\n"
-            s += "\tLatent Vector:\n"
-            s += f"\t\tsize={self.encoded_dim_size}\n"
-            s += "\tFully Connected Layer:\n"
-            s += f"\t\tsize={self.fc_size}\n"
-            for output_spec in self.spec.output_layers:
-                s += str(output_spec)
+            s += "\tInput shape:\n"
+            s += f"\t\tsize={self.input_shape}\n"
+            s += "\tOutput shape:\n"
+            s += f"\t\tsize={self.output_shape}\n"
             return s
         else:
-            return "Model has not been trained - no layers assigned yet"
+            return "Model has not been trained"
