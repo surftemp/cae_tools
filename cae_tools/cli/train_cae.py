@@ -1,22 +1,9 @@
-#    Copyright (C) 2023  National Centre for Earth Observation (NCEO)
-#
-#    This program is free software: you can redistribute it and/or modify
-#    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation, either version 3 of the License, or
-#    (at your option) any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#
-#    You should have received a copy of the GNU General Public License
-#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
 import argparse
+import json
 
 from cae_tools.models.conv_ae_model import ConvAEModel
-
+from cae_tools.models.var_ae_model import VarAEModel
+from cae_tools.models.model_sizer import ModelSpec
 
 def main():
 
@@ -33,15 +20,31 @@ def main():
     parser.add_argument("--fc-size", type=int, help="size of the fully-connected layers", default=16)
     parser.add_argument("--batch-size", type=int, help="number of images to process in one batch", default=10)
     parser.add_argument("--learning-rate", type=float, help="controls the rate at which model weights are updated", default=0.001)
+    parser.add_argument("--method", choices=["conv", "var"], required=True, help="model training method: 'conv' for ConvAEModel or 'var' for VarAEModel")
+    parser.add_argument("--layer-definitions-path", help="specify path of a JSON file with layer definitions", default=None)
 
     args = parser.parse_args()
 
     if args.continue_training:
-        mt = ConvAEModel()
+        if args.method == "conv":
+            mt = ConvAEModel()
+        elif args.method == "var":
+            mt = VarAEModel()
         mt.load(args.model_folder)
     else:
-        mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
-                     batch_size=args.batch_size, lr=args.learning_rate)
+        if args.method == "conv":
+            mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
+                             batch_size=args.batch_size, lr=args.learning_rate)
+        elif args.method == "var":
+            mt = VarAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
+                        batch_size=args.batch_size, lr=args.learning_rate)
+
+        # if specified, use the encoder/decoder layer specifications
+        if args.layer_definitions_path:
+            with open(args.layer_definitions_path) as f:
+                spec = ModelSpec()
+                spec.load(json.loads(f.read()))
+                mt.spec = spec
+
     mt.train(args.input_variables, args.output_variable, args.training_path, args.test_path)
     mt.save(args.model_folder)
-

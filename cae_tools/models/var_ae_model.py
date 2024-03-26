@@ -13,6 +13,22 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#    Copyright (C) 2023  National Centre for Earth Observation (NCEO)
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
 import torch
 from torchvision import transforms
 from torch.utils.data import DataLoader
@@ -21,13 +37,14 @@ import xarray as xr
 import json
 import os
 import time
+import matplotlib.pyplot as plt
 
 from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
-from .encoder import Encoder
+from .vae_encoder import VAE_Encoder
 from .decoder import Decoder
 
-class ConvAEModel:
+class VarAEModel:
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
@@ -140,7 +157,7 @@ class ConvAEModel:
             self.spec = ModelSpec()
             self.spec.load(json.loads(f.read()))
 
-        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        self.encoder = VAE_Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
         self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
@@ -150,43 +167,152 @@ class ConvAEModel:
         self.decoder.load_state_dict(torch.load(decoder_path))
         self.decoder.eval()
 
-    def __train_epoch(self, batches):
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def total_loss(self, reconstructed, original, mu, logvar):
+        beta = 1e-6
+        recon_loss = self.reconstruction_loss_fn(reconstructed, original)
+        kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        return recon_loss + beta*kl_loss
+
+    def reconstruction_loss_fn(self, reconstructed, original):
+        return torch.nn.functional.mse_loss(reconstructed, original)        
+
+    # def __train_epoch(self, batches):
+    #     self.encoder.train()
+    #     self.decoder.train()
+    #     train_loss = []
+    #     for (low_res, high_res, labels) in batches:
+    #         mu, log_var = self.encoder(low_res)
+    #         z = self.reparameterize(mu, log_var)  # Reparameterization step
+    #         decoded_data = self.decoder(z)
+
+    #         # Calculate total loss
+    #         loss = self.total_loss(decoded_data, high_res, mu, log_var)
+
+    #         # Backward pass
+    #         self.optim.zero_grad()
+    #         loss.backward()
+    #         self.optim.step()
+    #         train_loss.append(loss.detach().cpu().numpy())
+
+    #     mean_loss = np.mean(train_loss)
+    #     return float(mean_loss)
+
+    def print_layer_details(self, model):
+        for layer in model.modules():
+            if isinstance(layer, (torch.nn.Conv2d, torch.nn.ConvTranspose2d)):
+                layer_type = type(layer).__name__
+                input_channels = layer.in_channels
+                output_channels = layer.out_channels
+                kernel_size = layer.kernel_size
+                stride = layer.stride
+                print(f"{layer_type} - Input Channels: {input_channels}, Output Channels: {output_channels}, Kernel Size: {kernel_size}, Stride: {stride}")
+
+            elif isinstance(layer, torch.nn.Linear):
+                layer_type = type(layer).__name__
+                input_features = layer.in_features
+                output_features = layer.out_features
+                print(f"{layer_type} - Input Features: {input_features}, Output Features: {output_features}")   
+
+    def __train_epoch(self, batches,epoch):        
+
+        save_dir = f"./VAE_Train_Images"
+
         self.encoder.train()
-        self.decoder.train()
+        self.decoder.train()     
         train_loss = []
-        for (low_res, high_res, labels) in batches:
-            # Encode data
-            encoded_data = self.encoder(low_res)
-            decoded_data = self.decoder(encoded_data)
-            loss = self.loss_fn(decoded_data, high_res)
+        # train_loss_reconstruction = []       
+        image_counter = 0  # Counter for image file names
+
+      
+
+        for batch_idx, (low_res, high_res, labels) in enumerate(batches):
+            # Forward pass
+            mu, log_var = self.encoder(low_res)
+            z = self.reparameterize(mu, log_var)
+            decoded_data = self.decoder(z)
+
+            # Calculate total loss
+            loss = self.total_loss(decoded_data, high_res, mu, log_var)
+            # loss_record_reconstruction = self.reconstruction_loss_fn(decoded_data, high_res)
+
             # Backward pass
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
-            # Print batch loss
-            # print('\t partial train loss (single batch): %f' % (loss.data))
             train_loss.append(loss.detach().cpu().numpy())
+            # train_loss_reconstruction.append(loss_record_reconstruction.detach().cpu().numpy())
+
+            # Save decoded images
+            if epoch % self.test_interval == 0 and batch_idx == 0:
+                image_counter = self.save_decoded_images(decoded_data, low_res, high_res,  image_counter, save_dir,epoch)
 
         mean_loss = np.mean(train_loss)
-        return float(mean_loss)
+        # mean_loss_reconstruction = np.mean(train_loss_reconstruction)
+        # print(f"Epoch {epoch} - Mean Loss: {mean_loss} - Mean Reconstruction Loss: {mean_loss_reconstruction}")
+        return float(mean_loss)    
+    
+    def save_decoded_images(self, decoded_data, low_res,  high_res, image_counter, save_dir, epoch):
+        # Ensure directory exists
+        os.makedirs(save_dir, exist_ok=True)
 
+        # Convert tensors to CPU and numpy arrays
+        decoded_images = decoded_data.cpu().detach().numpy()
+        high_res_images = high_res.cpu().detach().numpy()
+        low_res_images = low_res.cpu().detach().numpy()
+
+        # Loop through the images in the batch and save each
+        for i in range(decoded_images.shape[0]):
+            plt.figure(figsize=(6, 18))  # Adjust size as needed
+
+            # Plot the decoded image
+            plt.subplot(3, 1, 1)  # 3 row, 1 columns, 1st subplot
+            plt.pcolormesh(decoded_images[i][0], cmap='jet')  # Adjust index for your data's structure
+            plt.colorbar()
+            plt.title(f"Epoch {epoch} Decoded Image {image_counter}")
+
+            # Plot the corresponding high resolution image
+            plt.subplot(3, 1, 2)  # 3 row, 1 columns, 2nd subplot
+            plt.pcolormesh(high_res_images[i][0], cmap='jet')  # Adjust index for your data's structure
+            plt.colorbar()
+            plt.title(f"Epoch {epoch} Original Image {image_counter}")
+
+            # Plot the corresponding high resolution image
+            plt.subplot(3, 1, 3)  # 3 row, 2 columns, 3rd subplot
+            plt.pcolormesh(low_res_images[i][0], cmap='jet')  # Adjust index for your data's structure
+            plt.colorbar()
+            plt.title(f"Epoch {epoch} Low Res Image {image_counter}")            
+
+            plt.savefig(os.path.join(save_dir, f"Epoch_{epoch}_comparison_{image_counter}.png"))
+            plt.close()
+            image_counter += 1  # Increment the image counter
+
+        return image_counter
+
+
+    
     def __test_epoch(self, batches, save_arr=None):
         test_loss = []
         self.encoder.eval()
         self.decoder.eval()
-        with torch.no_grad():  # No need to track the gradients
+        with torch.no_grad():
             ctr = 0
             for (low_res, high_res, labels) in batches:
-                # Encode data
-                encoded_data = self.encoder(low_res)
-                decoded_data = self.decoder(encoded_data)
-                loss = self.loss_fn(decoded_data, high_res)
+                mu, log_var = self.encoder(low_res)
+                z = self.reparameterize(mu, log_var)
+                decoded_data = self.decoder(z)
+                loss = self.reconstruction_loss_fn(decoded_data, high_res)  # Just reconstruction loss
                 test_loss.append(loss.detach().cpu().numpy())
                 if save_arr is not None:
                     save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
-                ctr += self.batch_size
-        mean_loss = np.mean(test_loss)
+                ctr += self.batch_size    
+            mean_loss = np.mean(test_loss)
         return float(mean_loss)
+
 
     def __score(self, batches, save_arr):
         self.encoder.eval()
@@ -194,17 +320,24 @@ class ConvAEModel:
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for input_data in batches:
-                encoded_data = self.encoder(input_data)
-                decoded_data = self.decoder(encoded_data)
-                # Convert to CPU and then to NumPy for inspection
-                encoded_data_np = encoded_data.cpu().numpy()
-                decoded_data_np = decoded_data.cpu().numpy()
+                mu, log_var = self.encoder(input_data)
+                z = self.reparameterize(mu, log_var)  # Reparameterization step
+                decoded_data = self.decoder(z)
+                # # Convert to CPU and then to NumPy for inspection
+                # mu_np = mu.cpu().numpy()
+                # log_var_np = log_var.cpu().numpy()
+                # z_np = z.cpu().numpy()
+                # decoded_data_np = decoded_data.cpu().numpy()
 
-                # Debugging: Print or inspect these variables
-                # print("encoded_data_np:", encoded_data_np)
-                # print("decoded_data:", decoded_data_np)                   
+                # # Debugging: Print or inspect these variables
+                # print("mu:", mu_np)
+                # print("log_var:", log_var_np)
+                # print("z:", z_np) 
+                # print("decoded_data:", decoded_data_np)       
+
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
                 ctr += self.batch_size
+
 
     def train(self, input_variables, output_variable, training_path, test_path):
         """
@@ -232,7 +365,7 @@ class ConvAEModel:
                                  output_size=(output_y, output_x), output_channels=output_chan)
 
         if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+            self.encoder = VAE_Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
         if not self.decoder:
             self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
@@ -256,17 +389,22 @@ class ConvAEModel:
             device = torch.device("cpu")
 
         print(f'Running on device: {device}')
+        print("Encoder Layers:")
+        self.print_layer_details(self.encoder)
+
+        print("\nDecoder Layers:")
+        self.print_layer_details(self.decoder)           
 
         start = time.time()
 
-        self.loss_fn = torch.nn.MSELoss()
+        # self.loss_fn = torch.nn.MSELoss()
 
         params_to_optimize = [
             {'params': self.encoder.parameters()},
             {'params': self.decoder.parameters()}
         ]
 
-        self.optim = torch.optim.Adam(params_to_optimize, lr=self.lr, weight_decay=self.weight_decay)
+        self.optim = torch.optim.Adam(params_to_optimize, lr=self.lr,betas=(0.9, 0.999), weight_decay=self.weight_decay)
 
         self.encoder.to(device)
         self.decoder.to(device)
@@ -285,7 +423,7 @@ class ConvAEModel:
 
         for epoch in range(self.nr_epochs):
 
-            train_loss = self.__train_epoch(train_batches)
+            train_loss = self.__train_epoch(train_batches,epoch)
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
                 self.history["train_loss"].append(train_loss)

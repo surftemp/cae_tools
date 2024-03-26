@@ -28,37 +28,22 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import torch
 from torch import nn
 
-class Encoder(nn.Module):
+class Linear(nn.Module):
 
-    def __init__(self, layers, encoded_space_dim, fc_size):
+    def __init__(self, input_shape, output_shape):
         super().__init__()
 
-        encoder_layers = []
-        for layer in layers:
-            input_channels = layer.get_input_dimensions()[0]
-            output_channels = layer.get_output_dimensions()[0]
-            encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                            stride=layer.get_stride()))
-            encoder_layers.append(nn.BatchNorm2d(output_channels))
-            encoder_layers.append(nn.ReLU(True))
+        (chan1, y1, x1) = input_shape
+        (chan2, y2, x2) = output_shape
 
-        self.encoder_cnn = nn.Sequential(*encoder_layers)
-
-        self.flatten = nn.Flatten(start_dim=1)
-
-        (chan, y, x) = layers[-1].get_output_dimensions()
-
-        self.encoder_lin = nn.Sequential(
-            nn.Linear(chan * y * x, fc_size),
-            nn.ReLU(True),
-            nn.Linear(fc_size, encoded_space_dim)
+        self.linear = nn.Sequential(
+            nn.Flatten(start_dim=1),
+            nn.Linear(chan1*y1*x1, chan2*y2*x2),
+            nn.Unflatten(dim=1, unflattened_size=(chan2, y2, x2))
         )
 
     def forward(self, x):
-        x = self.encoder_cnn(x)
-        x = self.flatten(x)
-        x = self.encoder_lin(x)
+        x = self.linear(x)
         return x
