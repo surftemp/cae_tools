@@ -1,8 +1,10 @@
 import argparse
 import json
+import os
 
 from cae_tools.models.conv_ae_model import ConvAEModel
 from cae_tools.models.var_ae_model import VarAEModel
+from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.model_sizer import ModelSpec
 
 def main():
@@ -20,17 +22,27 @@ def main():
     parser.add_argument("--fc-size", type=int, help="size of the fully-connected layers", default=16)
     parser.add_argument("--batch-size", type=int, help="number of images to process in one batch", default=10)
     parser.add_argument("--learning-rate", type=float, help="controls the rate at which model weights are updated", default=0.001)
-    parser.add_argument("--method", choices=["conv", "var"], required=True, help="model training method: 'conv' for ConvAEModel or 'var' for VarAEModel")
+    parser.add_argument("--method", choices=["conv", "var", "linear"], default="var", help="model training method: 'conv' for ConvAEModel or 'var' for VarAEModel or 'linear' for LinearModel")
     parser.add_argument("--layer-definitions-path", help="specify path of a JSON file with layer definitions", default=None)
 
     args = parser.parse_args()
 
     if args.continue_training:
-        if args.method == "conv":
+        parameters_path = os.path.join(args.model_folder, "parameters.json")
+        with open(parameters_path) as f:
+            parameters = json.loads(f.read())
+
+        if parameters["type"] == "ConvAEModel":
             mt = ConvAEModel()
-        elif args.method == "var":
+        elif parameters["type"] == "VarAEModel":
             mt = VarAEModel()
+        elif parameters["type"] == "LinearModel":
+            mt = LinearModel()
         mt.load(args.model_folder)
+        # update selected parameters from the command line args
+        mt.nr_epochs = args.nr_epochs
+        mt.lr = args.learning_rate
+        mt.batch_size = args.batch_size
     else:
         if args.method == "conv":
             mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
@@ -38,6 +50,8 @@ def main():
         elif args.method == "var":
             mt = VarAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                         batch_size=args.batch_size, lr=args.learning_rate)
+        elif args.method == "linear":
+            mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
 
         # if specified, use the encoder/decoder layer specifications
         if args.layer_definitions_path:
