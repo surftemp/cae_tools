@@ -27,12 +27,14 @@ class Decoder(nn.Module):
         (chan, y, x) = layers[0].get_input_dimensions()
         # Unpacking and setting as instance attributes
         (self.chan, self.y, self.x) = layers[0].get_input_dimensions()
+        # print(f"Initial input dimensions to the decoder: channels={chan}, y={y}, x={x}")
 
         self.decoder_lin = nn.Sequential(
             nn.Linear(encoded_space_dim, fc_size),
             nn.ReLU(True),
             nn.Linear(fc_size, chan * y * x),
         )
+        # print(f"Linear layer output size: {chan * y * x}")
 
         self.unflatten = nn.Unflatten(dim=1, unflattened_size=(chan, y, x))
 

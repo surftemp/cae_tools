@@ -16,6 +16,7 @@
 import argparse
 
 from cae_tools.models.conv_ae_model import ConvAEModel
+from cae_tools.models.var_ae_model import VarAEModel
 
 
 def main():
@@ -25,12 +26,18 @@ def main():
     parser.add_argument("output_path", help="path to write the netcdf4 file containing input data plus model outputs")
 
     parser.add_argument("--model-folder", help="folder to save the trained model to", required=True)
-    parser.add_argument("--input-variables", help="name of the input variable(s) in training/test data", required=True)
+    parser.add_argument("--input-variables", nargs="+", help="name of the input variable(s) in training/test data", required=True)
     parser.add_argument("--prediction-variable", help="name of the prediction variable to create in output data",
                         default="model_output")
+    parser.add_argument("--method", choices=["conv", "var"], required=True, help="model training method: 'conv' for ConvAEModel or 'var' for VarAEModel")
+    
 
     args = parser.parse_args()
 
-    mt = ConvAEModel()
+    if args.method == "conv":
+        mt = ConvAEModel()
+    elif args.method == "var":
+        mt = VarAEModel()
+
     mt.load(args.model_folder)
     mt.apply(args.data_path, args.input_variables, args.output_path, args.prediction_variable)

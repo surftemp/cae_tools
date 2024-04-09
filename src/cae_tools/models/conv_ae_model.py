@@ -21,6 +21,8 @@ import xarray as xr
 import json
 import os
 import time
+import matplotlib.pyplot as plt
+
 
 from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
@@ -150,11 +152,14 @@ class ConvAEModel:
         self.decoder.load_state_dict(torch.load(decoder_path))
         self.decoder.eval()
 
-    def __train_epoch(self, batches):
+    def __train_epoch(self, batches,epoch):
+        save_dir = f"./CAE_Train_Images"
+
         self.encoder.train()
         self.decoder.train()
         train_loss = []
-        for (low_res, high_res, labels) in batches:
+        image_counter = 0
+        for batch_idx, (low_res, high_res, labels) in enumerate(batches):
             # Encode data
             encoded_data = self.encoder(low_res)
             decoded_data = self.decoder(encoded_data)
@@ -166,9 +171,49 @@ class ConvAEModel:
             # Print batch loss
             # print('\t partial train loss (single batch): %f' % (loss.data))
             train_loss.append(loss.detach().cpu().numpy())
+            # Save decoded images
+            if epoch % self.test_interval == 0 and batch_idx == 0:
+                image_counter = self.save_decoded_images(decoded_data, low_res, high_res,  image_counter, save_dir, epoch)            
 
         mean_loss = np.mean(train_loss)
         return float(mean_loss)
+    
+    def save_decoded_images(self, decoded_data, low_res,  high_res, image_counter, save_dir, epoch):
+        # Ensure directory exists
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Convert tensors to CPU and numpy arrays
+        decoded_images = decoded_data.cpu().detach().numpy()
+        high_res_images = high_res.cpu().detach().numpy()
+        low_res_images = low_res.cpu().detach().numpy()
+
+        # Loop through the images in the batch and save each
+        for i in range(decoded_images.shape[0]):
+            plt.figure(figsize=(6, 18))  # Adjust size as needed
+
+            # Plot the decoded image
+            plt.subplot(3, 1, 1)  # 3 row, 1 columns, 1st subplot
+            plt.pcolormesh(decoded_images[i][0], cmap='jet')  # Adjust index for your data's structure
+            plt.colorbar()
+            plt.title(f"Epoch {epoch} Decoded Image {image_counter}")
+
+            # Plot the corresponding high resolution image
+            plt.subplot(3, 1, 2)  # 3 row, 1 columns, 2nd subplot
+            plt.pcolormesh(high_res_images[i][0], cmap='jet')  # Adjust index for your data's structure
+            plt.colorbar()
+            plt.title(f"Epoch {epoch} Original Image {image_counter}")
+
+            # Plot the corresponding high resolution image
+            plt.subplot(3, 1, 3)  # 3 row, 2 columns, 3rd subplot
+            plt.pcolormesh(low_res_images[i][0], cmap='jet')  # Adjust index for your data's structure
+            plt.colorbar()
+            plt.title(f"Epoch {epoch} Low Res Image {image_counter}")            
+
+            plt.savefig(os.path.join(save_dir, f"Epoch_{epoch}_comparison_{image_counter}.png"))
+            plt.close()
+            image_counter += 1  # Increment the image counter
+
+        return image_counter    
 
     def __test_epoch(self, batches, save_arr=None):
         test_loss = []
@@ -285,7 +330,7 @@ class ConvAEModel:
 
         for epoch in range(self.nr_epochs):
 
-            train_loss = self.__train_epoch(train_batches)
+            train_loss = self.__train_epoch(train_batches,epoch)
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
                 self.history["train_loss"].append(train_loss)

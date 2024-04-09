@@ -100,27 +100,36 @@ class ModelSpec:
             self.output_layers.append(layer_spec)
 
 
-def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28), output_channels=1, stride=2,
-                      kernel_size=3, limit=3):
+def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28), output_channels=1, stride=2,    stride_encoder = 1,
+                      kernel_size=3, limit=5):
     size = input_size
     channels = input_channels
     input_layers = []
-
-    while min(size) > limit:
+    first_layer = True
+    first_layer_same_padding = True
+    while size[0] > limit and size[1] > limit:
         (size_y, size_x) = size
-        input_dims = (int(channels), int(size_y), int(size_x))
-        size_x = ((size_x - (kernel_size - 1) - 1) // stride) + 1
-        size_y = ((size_y - (kernel_size - 1) - 1) // stride) + 1
-        channels *= 2
-        output_dims = (int(channels), int(size_y), int(size_x))
-        input_layers.append(LayerSpec(True, kernel_size, stride, input_dims, output_dims))
+        input_dims = (channels, size_y, size_x)
+
+        if first_layer and first_layer_same_padding:
+            # For 'same' padding, output dimensions are the same as input
+            output_dims = (2*channels, size_y, size_x)
+            first_layer = False  # Only apply to the first layer
+        else:
+            size_x = ((size_x - kernel_size) // stride_encoder) + 1
+            size_y = ((size_y - kernel_size) // stride_encoder) + 1
+            output_dims = (channels * 2, size_y, size_x)
+
+        print(f"Encoder Input dimensions: {input_dims} => Output dimensions: {output_dims}")
+        input_layers.append(LayerSpec(True, kernel_size, stride_encoder, input_dims, output_dims))
         size = (size_y, size_x)
+        channels = output_dims[0]  # Update channels for the next layer
 
     output_layers = []
 
     size = output_size
     channels = output_channels
-    while min(size) > limit:
+    while size[0] > limit and size[1] > limit:
         (size_y, size_x) = size
         output_dims = (int(channels), int(size_y), int(size_x))
         input_size_x = ((size_x - (kernel_size - 1) - 1) // stride) + 1
@@ -134,6 +143,8 @@ def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28),
         output_layers.insert(0, LayerSpec(False, kernel_size, stride, input_dims, output_dims,
                                           output_padding_y=output_padding_y, output_padding_x=output_padding_x))
         size = (input_size_y, input_size_x)
+        print(f"Decoder Input dimensions: {input_dims} => Output dimensions: {output_dims}")
+        print(f"Decoder channels: {channels}")
 
     spec = ModelSpec(input_layers, output_layers)
     return spec

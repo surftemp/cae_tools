@@ -25,11 +25,14 @@ class VAE_Encoder(nn.Module):
         
         # Convolutional layers
         encoder_layers = []
+        first_layer = True
         for layer in layers:
             input_channels = layer.get_input_dimensions()[0]
             output_channels = layer.get_output_dimensions()[0]
+            padding = 'same' if first_layer else 0
+            first_layer = False            
             encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                            stride=layer.get_stride()))
+                                            stride=layer.get_stride(),padding=padding))
             encoder_layers.append(nn.BatchNorm2d(output_channels))
             encoder_layers.append(nn.ReLU(True))
         self.encoder_cnn = nn.Sequential(*encoder_layers)
@@ -66,11 +69,20 @@ class VAE_Encoder(nn.Module):
                 init.constant_(module.bias, 0)           
      
 
-    def forward(self, x):
-        x = self.encoder_cnn(x)
+    def forward(self, x, return_feature_maps=False):
+        feature_maps = []
+        # Iterate through each layer in encoder_cnn and collect feature maps
+        for layer in self.encoder_cnn.children():
+            x = layer(x)
+            if return_feature_maps:
+                feature_maps.append(x)        
+                
         x = self.flatten(x)
         x = self.encoder_fc(x)
         x = self.fc_relu(x)
         mu = self.fc_mu(x)
         log_var = self.fc_logvar(x)
+        if return_feature_maps:
+            return mu, log_var, feature_maps
+        
         return mu, log_var

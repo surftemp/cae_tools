@@ -47,7 +47,7 @@ from .decoder import Decoder
 class VarAEModel:
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
-                 nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
+                 nr_epochs=1000, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, use_gpu=True):
         """
         Create a convolutional autoencoder general model
@@ -220,13 +220,15 @@ class VarAEModel:
 
     def __train_epoch(self, batches,epoch):        
 
-        save_dir = f"./VAE_Train_Images"
+        save_dir_output = f"./VAE_Train_Images"
+        save_dir_feature_maps = f"./VAE_Feature_Maps"
 
         self.encoder.train()
         self.decoder.train()     
         train_loss = []
         # train_loss_reconstruction = []       
         image_counter = 0  # Counter for image file names
+        feature_image_counter = 0  # Counter for feature map file names
 
       
 
@@ -248,8 +250,11 @@ class VarAEModel:
             # train_loss_reconstruction.append(loss_record_reconstruction.detach().cpu().numpy())
 
             # Save decoded images
-            if epoch % self.test_interval == 0 and batch_idx == 0:
-                image_counter = self.save_decoded_images(decoded_data, low_res, high_res,  image_counter, save_dir,epoch)
+            # if epoch % self.test_interval == 0 and batch_idx == 0:
+            #     image_counter = self.save_decoded_images(decoded_data, low_res, high_res,  image_counter, save_dir_output,epoch)
+            if epoch == self.nr_epochs - 1 and batch_idx == 0:    
+                mu,log_var,feature_maps = self.encoder(low_res, return_feature_maps=True)
+                feature_image_counter = self.save_feature_maps(feature_maps, feature_image_counter, save_dir_feature_maps, epoch)
 
         mean_loss = np.mean(train_loss)
         # mean_loss_reconstruction = np.mean(train_loss_reconstruction)
@@ -292,6 +297,44 @@ class VarAEModel:
             image_counter += 1  # Increment the image counter
 
         return image_counter
+    
+    def save_feature_maps(self, feature_maps, image_counter, save_dir, epoch):
+        # Ensure directory exists
+        os.makedirs(save_dir, exist_ok=True)
+
+        # Loop through each feature map
+        for layer_index, fmap in enumerate(feature_maps):
+            # Convert feature map tensor to CPU and numpy array
+            fmap = fmap.cpu().detach().numpy()
+
+            # Loop through each image in the batch
+            for i in range(fmap.shape[0]):
+                # Get number of channels in the feature map
+                num_channels = fmap.shape[1]
+                if num_channels > 8:
+                    return image_counter
+                # Set up subplot grid based on number of channels
+                fig, axes = plt.subplots(nrows=num_channels, ncols=1, figsize=(6, 18))
+
+                # Loop through each channel in the feature map
+                for channel in range(num_channels):
+                    if num_channels == 1:  # If only one channel, axes is not an array
+                        ax = axes
+                    else:
+                        ax = axes[channel]
+
+                    ax.imshow(fmap[i, channel], cmap='jet')
+                    ax.axis('off')  # Turn off axis
+                    ax.set_title(f"Layer {layer_index} Channel {channel}")
+
+                fig.suptitle(f"Epoch {epoch} Feature Maps of Layer {layer_index} ")
+                plt.savefig(os.path.join(save_dir, f"Epoch_{epoch}_Layer_{layer_index}_Image_{image_counter}.png"))
+                plt.close()
+
+                image_counter += 1  # Increment the image counter
+
+        return image_counter
+
 
 
     
@@ -389,11 +432,11 @@ class VarAEModel:
             device = torch.device("cpu")
 
         print(f'Running on device: {device}')
-        print("Encoder Layers:")
-        self.print_layer_details(self.encoder)
+        # print("Encoder Layers:")
+        # self.print_layer_details(self.encoder)
 
-        print("\nDecoder Layers:")
-        self.print_layer_details(self.decoder)           
+        # print("\nDecoder Layers:")
+        # self.print_layer_details(self.decoder)           
 
         start = time.time()
 
