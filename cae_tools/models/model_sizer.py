@@ -27,7 +27,9 @@ class LayerSpec:
 
     def __repr__(self):
         s = "\tInput Convolutional Layer:\n" if self.is_input else "\tOutput Convolutional Layer:\n"
-        s += f"\t\tkernel_size={self.kernel_size}  stride={self.stride} output_padding=({self.output_padding_y},{self.output_padding_x})\n"
+        s += f"\t\tkernel_size={self.kernel_size}  stride={self.stride}\n"
+        if self.output_padding_x or self.output_padding_y:
+            s += f"\t\toutput_padding=({self.output_padding_y},{self.output_padding_x})\n"
         s += f"\t\t{self.input_dimensions} => {self.output_dimensions}\n"
         return s
 
@@ -99,9 +101,18 @@ class ModelSpec:
             layer_spec.load(output_layers[idx])
             self.output_layers.append(layer_spec)
 
+    def __repr__(self):
+        s = "Input Layers:\n"
+        for layer in self.input_layers:
+            s += str(layer)
+        s += "Output Layers:\n"
+        for layer in self.output_layers:
+            s += str(layer)
+        return s
+
 
 def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28), output_channels=1, stride=2,
-                      kernel_size=3, limit=3):
+                      kernel_size=3, limit=3, input_layer_count=None, output_layer_count=None):
     size = input_size
     channels = input_channels
     input_layers = []
@@ -111,7 +122,7 @@ def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28),
         input_dims = (int(channels), int(size_y), int(size_x))
         size_x = ((size_x - (kernel_size - 1) - 1) // stride) + 1
         size_y = ((size_y - (kernel_size - 1) - 1) // stride) + 1
-        if min(size_x,size_y) < limit:
+        if (input_layer_count is not None and len(input_layers) >= input_layer_count) or min(size_x,size_y) < limit:
             break
         channels *= 2
         output_dims = (int(channels), int(size_y), int(size_x))
@@ -119,24 +130,31 @@ def create_model_spec(input_size=(7, 7), input_channels=1, output_size=(28, 28),
         size = (size_y, size_x)
 
     output_layers = []
-
+    (reduced_size_y, reduced_size_x) = size
     size = output_size
     channels = output_channels
-    while min(size) > limit:
+    while True:
         (size_y, size_x) = size
+        if (output_layer_count is not None and len(output_layers) >= output_layer_count) \
+                or size_x <= reduced_size_x or size_y <= reduced_size_y:
+            break
+
         output_dims = (int(channels), int(size_y), int(size_x))
-        input_size_x = ((size_x - (kernel_size - 1) - 1) // stride) + 1
-        input_size_y = ((size_y - (kernel_size - 1) - 1) // stride) + 1
-        output_size_x = (input_size_x - 1) * stride + (kernel_size - 1) + 1
-        output_size_y = (input_size_y - 1) * stride + (kernel_size - 1) + 1
-        output_padding_x = size_x - output_size_x
-        output_padding_y = size_y - output_size_y
+        effective_kernel_size = kernel_size
+        while  (size_x - (effective_kernel_size - 1) - 1) % stride != 0:
+            effective_kernel_size += 1
+            print(effective_kernel_size)
+        input_size_x = ((size_x - (effective_kernel_size - 1) - 1) // stride) + 1
+        input_size_y = ((size_y - (effective_kernel_size - 1) - 1) // stride) + 1
+
         channels *= 2
         input_dims = (int(channels), int(input_size_y), int(input_size_x))
-        output_layers.insert(0, LayerSpec(False, kernel_size, stride, input_dims, output_dims,
-                                          output_padding_y=output_padding_y, output_padding_x=output_padding_x))
+        output_layers.insert(0, LayerSpec(False, effective_kernel_size, stride, input_dims, output_dims))
         size = (input_size_y, input_size_x)
 
     spec = ModelSpec(input_layers, output_layers)
     return spec
 
+# spec = create_model_spec(input_size=(100, 100), input_channels=1, output_size=(100, 100), output_channels=1, stride=2,
+#                      kernel_size=3, limit=3, input_layer_count=1, output_layer_count=5)
+# print(spec)
