@@ -4,9 +4,19 @@ A convolutional auto-encoder library for modelling image-to-image transformation
 
 ## Dependencies
 
-`train_cae` and `apply_cae` requires: pytorch, xarray, netcdf4
+`train_cae` and `apply_cae` requires: pytorch, xarray, netcdf4, dask
 
 `evaluate_cae` requires htmlfive (https://github.com/niallmcc/html-five), xarray, netcdf4, pillow, seaborn, matplotlib
+
+A suitable conda environment can be obtained using:
+
+```
+conda create -n pyt python=3.8 pytorch xarray dask netcdf4 pillow seaborn matplotlib scipy
+conda activate pyt
+git clone https://github.com/niallmcc/html-five.git
+cd html-five
+pip install -e .
+```
 
 ## Installation
 
@@ -34,7 +44,11 @@ Useful training parameters:
 |--latent-size | size of the latent layer (compressed representation) in neurons, defaults to 4                   |
  |--fc-size | size of the fully connected layers immediately before and after the latent layer, defaults to 16 |
 | --batch-size | size of each training batch, defaults to 10                                                      |
-| --learning-rate | the optimisers learning rate, defaults to 0.001                                                  |                                                                             
+| --learning-rate | the optimisers learning rate, defaults to 0.001                                                  |
+| --stride | stride to use in convolutional layers", defaults to 2                                            |
+| --kernel-size | kernel size to use in convolutional layers, defaults to 3                                        |
+| --input-layer-count | number of input convolutional layers, defaults to auto (reduce image size to approximately 3x3)  |
+| --output-layer-count | number of output convolutional layers, defaults to auto (reduce image size to approximately 3x3)  |
 
 To apply:
 

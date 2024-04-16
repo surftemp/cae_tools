@@ -24,6 +24,10 @@ def main():
     parser.add_argument("--learning-rate", type=float, help="controls the rate at which model weights are updated", default=0.001)
     parser.add_argument("--method", choices=["conv", "var", "linear"], default="var", help="model training method: 'conv' for ConvAEModel or 'var' for VarAEModel or 'linear' for LinearModel")
     parser.add_argument("--layer-definitions-path", help="specify path of a JSON file with layer definitions", default=None)
+    parser.add_argument("--stride", type=int, help="stride to use in convolutional layers", default=2)
+    parser.add_argument("--kernel-size", type=int, help="kernel size to use in convolutional layers", default=3)
+    parser.add_argument("--input-layer-count", type=int, help="number of input convolutional layers", default=None)
+    parser.add_argument("--output-layer-count", type=int, help="number of output convolutional layers", default=None)
 
     args = parser.parse_args()
 
