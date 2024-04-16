@@ -28,7 +28,6 @@ def main():
     parser.add_argument("--kernel-size", type=int, help="kernel size to use in convolutional layers", default=3)
     parser.add_argument("--input-layer-count", type=int, help="number of input convolutional layers", default=None)
     parser.add_argument("--output-layer-count", type=int, help="number of output convolutional layers", default=None)
-    parser.add_argument("--latent-size", type=int, help="size of the latent space", default=4)
 
     args = parser.parse_args()
 
