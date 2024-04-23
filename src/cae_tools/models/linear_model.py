@@ -22,14 +22,16 @@ import json
 import os
 import time
 
+from .base_model import BaseModel
 from .ds_dataset import DSDataset
 from .linear import Linear
+from ..utils.model_database import ModelDatabase
 
-class LinearModel:
+class LinearModel(BaseModel):
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10,
-                 lr=0.001, weight_decay=1e-5, use_gpu=True):
+                 lr=0.001, weight_decay=1e-5, use_gpu=True, database_path=None):
         """
         Create a simple linear model
 
@@ -41,6 +43,7 @@ class LinearModel:
         :param lr: learning rate
         :param weight_decay: weight decay?
         :param use_gpu: use GPU if present
+        :param database_path: path to optional tracking database
         """
 
         self.normalise_input = normalise_input
@@ -56,6 +59,21 @@ class LinearModel:
         self.use_gpu = use_gpu
         self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
         self.optim = None
+        self.db = ModelDatabase(database_path) if database_path else None
+
+    def get_parameters(self):
+        return {
+            "model_id": self.get_model_id(),
+            "type": "LinearModel",
+            "input_shape": list(self.input_shape),
+            "output_shape": list(self.output_shape),
+            "batch_size": self.batch_size,
+            "test_interval": self.test_interval,
+            "lr": self.lr,
+            "weight_decay": self.weight_decay,
+            "normalise_input": self.normalise_input,
+            "normalise_output": self.normalise_output
+        }
 
     def save(self, to_folder):
         """
@@ -71,17 +89,7 @@ class LinearModel:
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
 
-        parameters = {
-            "type": "LinearModel",
-            "input_shape": list(self.input_shape),
-            "output_shape": list(self.output_shape),
-            "batch_size": self.batch_size,
-            "test_interval": self.test_interval,
-            "lr": self.lr,
-            "weight_decay": self.weight_decay,
-            "normalise_input": self.normalise_input,
-            "normalise_output": self.normalise_output
-        }
+        parameters = self.get_parameters()
 
         parameters_path = os.path.join(to_folder, "parameters.json")
         with open(parameters_path, "w") as f:
@@ -108,6 +116,8 @@ class LinearModel:
         parameters_path = os.path.join(from_folder, "parameters.json")
         with open(parameters_path) as f:
             parameters = json.loads(f.read())
+            if "model_id" in parameters:
+                self.set_model_id(parameters["model_id"])
             self.input_shape = tuple(parameters["input_shape"])
             self.output_shape = tuple(parameters["output_shape"])
             self.batch_size = parameters["batch_size"]
@@ -172,7 +182,7 @@ class LinearModel:
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
                 ctr += self.batch_size
 
-    def train(self, input_variables, output_variable, training_path, test_path):
+    def train(self, input_variables, output_variable, training_path, test_path, model_path=""):
         """
         Train the model (or continue training)
 
@@ -180,7 +190,9 @@ class LinearModel:
         :param output_variable: name of the output variable in training/test datasets
         :param training_path: path to a netcdf4 file containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
         :param test_path: path to a netcdf4 file to use for testing only.  Format as above
+        :param model_path: path to save model to after training
         """
+        super().__init__()
         train_ds = DSDataset(xr.open_dataset(training_path), input_variables, output_variable,
                              normalise_in=self.normalise_input, normalise_out=self.normalise_output)
         self.normalisation_parameters = train_ds.get_normalisation_parameters()
@@ -241,8 +253,8 @@ class LinearModel:
             high_res = high_res.to(device)
             test_batches.append((low_res, high_res, labels))
 
+        train_loss = test_loss = 0.0
         for epoch in range(self.nr_epochs):
-
             train_loss = self.__train_epoch(train_batches)
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
@@ -256,6 +268,13 @@ class LinearModel:
         self.history['nr_epochs'] = self.history['nr_epochs'] + self.nr_epochs
 
         print("elapsed:" + str(elapsed))
+
+        if self.db:
+            self.db.add_training_result(self.get_model_id(), "Linear", output_variable, input_variables, self.summary(),
+                                        model_path, training_path, train_loss, test_path, test_loss,
+                                        self.get_parameters(), {})
+        if model_path:
+            self.save(model_path)
 
     def apply(self, input_path, input_variables, output_path, prediction_variable="model_output",
                 channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):

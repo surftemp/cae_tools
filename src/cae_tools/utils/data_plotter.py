@@ -20,7 +20,7 @@ import numpy as np
 import datetime
 
 
-from htmlfive.html5_builder import Html5Builder
+from .html5.html5_builder import Html5Builder
 from .table_fragment import TableFragment
 from .image_fragment import InlineImageFragment
 from .utils import add_exo_dependencies
@@ -40,14 +40,13 @@ def save_image(arr,vmin,vmax,path,cmap_name):
 
 class DataPlotter:
 
-    def __init__(self, data_path, input_variables, output_variable, output_html_path, vmin, vmax):
+    def __init__(self, data_path, input_variables, output_variable, output_html_path):
         self.data_path = data_path
 
         self.input_variables = input_variables
         self.output_variable = output_variable
         self.output_html_path = output_html_path
-        self.vmin = vmin
-        self.vmax = vmax
+
 
 
     def run(self):
@@ -58,15 +57,11 @@ class DataPlotter:
 
         builder.body().add_element("h2", {"id": "heading"}).add_text(f"Plot for {self.data_path}")
 
-
         plot_variables = self.input_variables+[self.output_variable]
 
         image_width=256
 
         ds = xr.open_dataset(self.data_path)
-
-
-        builder.body().add_element("p", {}).add_text(f"vmin={self.vmin},vmax={self.vmax}")
 
         aux_inputs = []
         for vname in ds.variables:
@@ -79,16 +74,39 @@ class DataPlotter:
         default_cmap = "coolwarm"
 
         tbl = TableFragment()
-        tbl.add_row(["time"]+plot_variables+aux_inputs)
+        tbl.add_row(["box"]+plot_variables+aux_inputs)
 
+        vmins = {}
+        vmaxs = {}
         for idx in range(0,n):
             cells = []
-            cell_time = ds["time"][idx].data
+            cell_time = ds["box_time"][idx].data
             cells.append(str(cell_time)[:10])
             for target in plot_variables:
                 with tempfile.NamedTemporaryFile(suffix=".png") as p:
+                    splits=target.split(":")
+                    name = splits[0]
+                    if len(splits) > 1:
+                        cmap = splits[1]
+                    else:
+                        cmap = default_cmap
+                    if len(splits) > 2:
+                        vmin = float(splits[2])
+                    else:
+                        if name not in vmins:
+                            vmins[name] = float(ds[name].min())
+                        vmin = vmins[name]
+
+
+                    if len(splits) > 3:
+                        vmax = float(splits[3])
+                    else:
+                        if name not in vmaxs:
+                            vmaxs[name] = float(ds[name].max())
+                        vmax = vmaxs[name]
+                    print(name, vmin, vmax)
                     # save_image(ds[target][idx, 0, :, :], self.vmin, self.vmax, p.name, default_cmap)
-                    save_image(ds[target][idx, :, :], self.vmin, self.vmax, p.name, default_cmap)
+                    save_image(ds[name][idx, 0, :, :], vmin, vmax, p.name, cmap)
                     cells.append(InlineImageFragment(p.name,w=image_width))
 
             for aux_input in aux_inputs:

@@ -6,16 +6,13 @@ A convolutional auto-encoder library for modelling image-to-image transformation
 
 `train_cae` and `apply_cae` requires: pytorch, xarray, netcdf4, dask
 
-`evaluate_cae` requires htmlfive (https://github.com/niallmcc/html-five), xarray, netcdf4, pillow, seaborn, matplotlib
+`evaluate_cae` requires xarray, netcdf4, pillow, seaborn, matplotlib
 
 A suitable conda environment can be obtained using:
 
 ```
 conda create -n pyt python=3.8 pytorch xarray dask netcdf4 pillow seaborn matplotlib scipy
 conda activate pyt
-git clone https://github.com/niallmcc/html-five.git
-cd html-five
-pip install -e .
 ```
 
 ## Installation
