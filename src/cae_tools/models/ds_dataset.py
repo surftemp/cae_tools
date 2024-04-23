@@ -66,6 +66,9 @@ class DSDataset(torch.utils.data.Dataset):
             self.min_output = None
             self.max_output = None
 
+    def set_normalise_output(self, normalise_out):
+        self.normalise_out = normalise_out
+
     def get_normalisation_parameters(self):
         return [self.min_inputs, self.max_inputs, self.min_output, self.max_output]
 
@@ -106,8 +109,8 @@ class DSDataset(torch.utils.data.Dataset):
         else:
             return arr
 
-    def denormalise_output(self, arr):
-        if self.normalise_out:
+    def denormalise_output(self, arr, force=False):
+        if force or self.normalise_out:
             return self.min_output + (arr * (self.max_output - self.min_output))
         else:
             return arr
