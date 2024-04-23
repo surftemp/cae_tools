@@ -28,6 +28,7 @@ from .ds_dataset import DSDataset
 from .encoder import Encoder
 from .decoder import Decoder
 from ..utils.model_database import ModelDatabase
+from .model_metric import ModelMetric
 
 class ConvAEModel(BaseModel):
 
@@ -336,6 +337,19 @@ class ConvAEModel(BaseModel):
                                         model_path, training_path, train_loss, test_path, test_loss, self.get_parameters(), self.spec.save())
         if model_path:
             self.save(model_path)
+
+        # pass over the training and test sets and calculate model metrics
+
+        metrics = {}
+        metrics["test"] = self.evaluate(test_ds, device, self.batch_size)
+        metrics["train"] = self.evaluate(train_ds, device, self.batch_size)
+
+        self.dump_metrics("Test Metrics",metrics["test"])
+        self.dump_metrics("Train Metrics",metrics["train"])
+
+        if self.db:
+            self.db.add_evaluation_result(self.get_model_id(),training_path, test_path, metrics)
+
 
     def apply(self, input_path, input_variables, output_path, prediction_variable="model_output",
                 channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
