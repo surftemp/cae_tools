@@ -28,6 +28,9 @@ def main():
     parser.add_argument("--kernel-size", type=int, help="kernel size to use in convolutional layers", default=3)
     parser.add_argument("--input-layer-count", type=int, help="number of input convolutional layers", default=None)
     parser.add_argument("--output-layer-count", type=int, help="number of output convolutional layers", default=None)
+    parser.add_argument("--model-id", type=str, help="specify the model id when creating a model", default=None)
+    parser.add_argument("--database-path", type=str, help="path to a database to store evaluation results",
+                        default=None)
 
     args = parser.parse_args()
 
@@ -50,12 +53,15 @@ def main():
     else:
         if args.method == "conv":
             mt = ConvAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
-                             batch_size=args.batch_size, lr=args.learning_rate)
+                             batch_size=args.batch_size, lr=args.learning_rate, database_path=args.database_path)
         elif args.method == "var":
             mt = VarAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                         batch_size=args.batch_size, lr=args.learning_rate)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
+
+        if args.model_id:
+            mt.set_model_id(args.model_id)
 
         # if specified, use the encoder/decoder layer specifications
         if args.layer_definitions_path:
@@ -64,5 +70,5 @@ def main():
                 spec.load(json.loads(f.read()))
                 mt.spec = spec
 
-    mt.train(args.input_variables, args.output_variable, args.training_path, args.test_path)
-    mt.save(args.model_folder)
+    mt.train(args.input_variables, args.output_variable, args.training_path, args.test_path, args.model_folder)
+

@@ -22,17 +22,19 @@ import json
 import os
 import time
 
+from .base_model import BaseModel
 from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
 from .encoder import Encoder
 from .decoder import Decoder
+from ..utils.model_database import ModelDatabase
 
-class ConvAEModel:
+class ConvAEModel(BaseModel):
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, use_gpu=True, conv_kernel_size=3, conv_stride=2,
-                 conv_input_layer_count=None, conv_output_layer_count=None):
+                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None):
         """
         Create a convolutional autoencoder general model
 
@@ -50,8 +52,9 @@ class ConvAEModel:
         :param conv_stride: stride to use in convolutional layers
         :param conv_input_layer_count: number of input convolutional layers to use
         :param conv_output_layer_count: number of output convolutional layers to use
+        :param database_path: path to optional tracking database
         """
-
+        super().__init__()
         self.normalise_input = normalise_input
         self.normalise_output = normalise_output
         self.normalisation_parameters = None
@@ -72,6 +75,27 @@ class ConvAEModel:
         self.spec = None
         self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
         self.optim = None
+        self.db = ModelDatabase(database_path) if database_path else None
+
+    def get_parameters(self):
+        return {
+            "type": "ConvAEModel",
+            "input_shape": list(self.input_shape),
+            "output_shape": list(self.output_shape),
+            "batch_size": self.batch_size,
+            "test_interval": self.test_interval,
+            "encoded_dim_size": self.encoded_dim_size,
+            "fc_size": self.fc_size,
+            "lr": self.lr,
+            "weight_decay": self.weight_decay,
+            "normalise_input": self.normalise_input,
+            "normalise_output": self.normalise_output,
+            "conv_kernel_size": self.conv_kernel_size,
+            "conv_stride": self.conv_stride,
+            "conv_input_layer_count": self.conv_input_layer_count,
+            "conv_output_layer_count": self.conv_output_layer_count,
+            "model_id": self.get_model_id()
+        }
 
     def save(self, to_folder):
         """
@@ -88,23 +112,7 @@ class ConvAEModel:
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
 
-        parameters = {
-            "type": "ConvAEModel",
-            "input_shape": list(self.input_shape),
-            "output_shape": list(self.output_shape),
-            "batch_size": self.batch_size,
-            "test_interval": self.test_interval,
-            "encoded_dim_size": self.encoded_dim_size,
-            "fc_size": self.fc_size,
-            "lr": self.lr,
-            "weight_decay": self.weight_decay,
-            "normalise_input": self.normalise_input,
-            "normalise_output": self.normalise_output,
-            "conv_kernel_size": self.conv_kernel_size,
-            "conv_stride": self.conv_stride,
-            "conv_input_layer_count": self.conv_input_layer_count,
-            "conv_output_layer_count": self.conv_output_layer_count
-        }
+        parameters = self.get_parameters()
 
         parameters_path = os.path.join(to_folder, "parameters.json")
         with open(parameters_path, "w") as f:
@@ -134,6 +142,8 @@ class ConvAEModel:
         parameters_path = os.path.join(from_folder, "parameters.json")
         with open(parameters_path) as f:
             parameters = json.loads(f.read())
+            if "model_id" in parameters:
+                self.set_model_id(parameters["model_id"])
             self.input_shape = tuple(parameters["input_shape"])
             self.output_shape = tuple(parameters["output_shape"])
             self.batch_size = parameters["batch_size"]
@@ -225,7 +235,7 @@ class ConvAEModel:
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
                 ctr += self.batch_size
 
-    def train(self, input_variables, output_variable, training_path, test_path):
+    def train(self, input_variables, output_variable, training_path, test_path, model_path=""):
         """
         Train the model (or continue training)
 
@@ -233,6 +243,7 @@ class ConvAEModel:
         :param output_variable: name of the output variable in training/test datasets
         :param training_path: path to a netcdf4 file containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
         :param test_path: path to a netcdf4 file to use for testing only.  Format as above
+        :param model_path: path to save model to after training
         """
         train_ds = DSDataset(xr.open_dataset(training_path), input_variables, output_variable,
                              normalise_in=self.normalise_input, normalise_out=self.normalise_output)
@@ -251,7 +262,6 @@ class ConvAEModel:
                                  output_size=(output_y, output_x), output_channels=output_chan,
                                  kernel_size=self.conv_kernel_size, stride=self.conv_stride,
                                  input_layer_count=self.conv_input_layer_count, output_layer_count=self.conv_output_layer_count)
-            print(self.spec)
 
         if not self.encoder:
             self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
@@ -305,8 +315,8 @@ class ConvAEModel:
             high_res = high_res.to(device)
             test_batches.append((low_res, high_res, labels))
 
+        train_loss = test_loss = 0.0
         for epoch in range(self.nr_epochs):
-
             train_loss = self.__train_epoch(train_batches)
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
@@ -320,6 +330,12 @@ class ConvAEModel:
         self.history['nr_epochs'] = self.history['nr_epochs'] + self.nr_epochs
 
         print("elapsed:" + str(elapsed))
+
+        if self.db:
+            self.db.add_training_result(self.get_model_id(), "ConvAE", output_variable, input_variables, self.summary(),
+                                        model_path, training_path, train_loss, test_path, test_loss, self.get_parameters(), self.spec.save())
+        if model_path:
+            self.save(model_path)
 
     def apply(self, input_path, input_variables, output_path, prediction_variable="model_output",
                 channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):

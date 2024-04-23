@@ -13,20 +13,15 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from .html5.html5_builder import ElementFragment
+import uuid
 
+class BaseModel:
 
-class TableFragment(ElementFragment):
+    def __init__(self):
+        self.model_id = str(uuid.uuid4())
 
-    def __init__(self, attrs={},style={}):
-        super().__init__("table",attrs,style)
+    def set_model_id(self, model_id):
+        self.model_id = model_id
 
-    def add_row(self, cells):
-        tr = self.add_element("tr")
-        for cell in cells:
-            td = tr.add_element("td")
-            if isinstance(cell,str):
-                td.add_text(cell)
-            else:
-                td.add_fragment(cell)
-
+    def get_model_id(self):
+        return self.model_id

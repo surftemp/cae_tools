@@ -15,7 +15,7 @@
 
 import argparse
 
-from cae_tools.utils.evaluate import ModelEvaluator
+from cae_tools.models.model_evaluator import ModelEvaluator
 
 
 def main():
@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--prediction-variable", help="name of the prediction variable to create in output data",
                        default="")
 
+    parser.add_argument("--database-path", type=str, help="path to a database to store evaluation results", default=None)
+
     args = parser.parse_args()
 
     mt = ModelEvaluator(train_path=args.training_path,
@@ -41,5 +43,6 @@ def main():
                         output_variable=args.output_variable,
                         output_html_path=args.output_html_path,
                         model_path=args.model_folder,
-                        model_output_variable=args.prediction_variable)
+                        model_output_variable=args.prediction_variable,
+                        database_path=args.database_path)
     mt.run()
