@@ -28,14 +28,12 @@ def main():
     parser.add_argument("--input-variables", nargs="+", help="name of the input variable(s) in training/test data", required=True)
     parser.add_argument("--output-variable", help="name of the output variable in training/test data", required=True)
 
-    parser.add_argument("--vmin", type=float, help="minimum value for scale", default=265)
-    parser.add_argument("--vmax", type=float, help="minimum value for scale", default=315)
-
 
     args = parser.parse_args()
 
-    p = DataPlotter(data_path=args.data_path, input_variables=args.input_variables, output_variable=args.output_variable, output_html_path=args.output_html_path,
-                    vmin=args.vmin, vmax=args.vmax)
+    p = DataPlotter(data_path=args.data_path,
+                    input_variables=args.input_variables, output_variable=args.output_variable,
+                    output_html_path=args.output_html_path)
     p.run()
 
 if __name__ == '__main__':

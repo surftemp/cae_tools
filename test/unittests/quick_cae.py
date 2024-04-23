@@ -17,7 +17,7 @@ import unittest
 import os.path
 
 from cae_tools.models.conv_ae_model import ConvAEModel
-from cae_tools.utils.evaluate import ModelEvaluator
+from cae_tools.models.model_evaluator import ModelEvaluator
 
 import test_specs
 

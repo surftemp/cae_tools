@@ -19,19 +19,19 @@ from PIL import Image
 from matplotlib import cm
 import numpy as np
 import seaborn as sns
-
+import datetime
 import pandas as pd
 import math
 import json
-
-from htmlfive.html5_builder import Html5Builder
-from .table_fragment import TableFragment
-from .image_fragment import InlineImageFragment
-from .utils import add_exo_dependencies
-from .tab_fragment import TabbedFragment
 import tempfile
 
-from .utils import anti_aliasing_style
+from ..utils.html5.html5_builder import Html5Builder
+from ..utils.table_fragment import TableFragment
+from ..utils.image_fragment import InlineImageFragment
+from ..utils.utils import add_exo_dependencies
+from ..utils.tab_fragment import TabbedFragment
+from ..utils.model_database import ModelDatabase
+from ..utils.utils import anti_aliasing_style
 
 def save_image(arr,vmin,vmax,path,cmap_name):
     if cmap_name == "viridis":
@@ -44,10 +44,10 @@ def save_image(arr,vmin,vmax,path,cmap_name):
     im.save(path)
 
 
-
 class ModelEvaluator:
 
-    def __init__(self, train_path, test_path, input_variables, output_variable, output_html_path, model_output_variable="", model_path=""):
+    def __init__(self, train_path, test_path, input_variables, output_variable, output_html_path, model_output_variable="", model_path="",
+                 database_path=""):
         self.train_path = train_path
         self.test_path = test_path
         self.input_variables = input_variables
@@ -55,6 +55,8 @@ class ModelEvaluator:
         self.output_html_path = output_html_path
         self.model_path = model_path
         self.model_output_variable = model_output_variable
+        self.database_path = database_path
+        self.db = ModelDatabase(database_path) if database_path else None
 
     def compute_measure(self, dataset, idx, measure):
         predicted = dataset[self.model_output_variable][idx, 0, :, :].values
@@ -81,7 +83,6 @@ class ModelEvaluator:
                 training_losses = json.loads(f.read())
             with open(os.path.join(self.model_path,"parameters.json")) as f:
                 training_parameters = json.loads(f.read())
-
 
         plot_variables = self.input_variables+[self.output_variable]
         if self.model_output_variable:
@@ -213,4 +214,9 @@ class ModelEvaluator:
 
         with open(self.output_html_path,"w") as f:
             f.write(builder.get_html())
+
+        # TODO write results into the model database.  Also make the html generation more optional
+
+
+
 

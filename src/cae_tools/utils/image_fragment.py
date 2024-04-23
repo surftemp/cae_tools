@@ -13,7 +13,7 @@
 #    You should have received a copy of the GNU General Public License
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-from htmlfive.html5_builder import Html5Builder, Fragment, ElementFragment
+from .html5.html5_builder import Html5Builder, Fragment, ElementFragment
 import base64
 
 from .utils import add_exo_dependencies, prepare_attrs
