@@ -173,7 +173,7 @@ class LinearModel(BaseModel):
         mean_loss = np.mean(test_loss)
         return float(mean_loss)
 
-    def __score(self, batches, save_arr):
+    def score(self, batches, save_arr):
         self.weights.eval()
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
@@ -324,7 +324,7 @@ class LinearModel(BaseModel):
             low_res = low_res.to(device)
             score_batches.append(low_res)
 
-        self.__score(score_batches, save_arr=score_arr)
+        self.score(score_batches, save_arr=score_arr)
         score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
                 dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
 
