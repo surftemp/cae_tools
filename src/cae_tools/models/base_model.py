@@ -48,7 +48,7 @@ class BaseModel:
             # for each batch, score, denormalise the scores and compare with the original outputs
             input = input.to(device)
             score_arr = np.zeros(output_not_norm.shape)
-            self.__score([input], save_arr=score_arr)
+            self.score([input], save_arr=score_arr)
             output_not_norm = output_not_norm.numpy(force=True)
             score_arr = dataset.denormalise_output(score_arr,force=True)
             # feed the instances in each batch into the model metric accumulator
@@ -62,5 +62,5 @@ class BaseModel:
         for key in metrics:
             print(f"\t{key:30s}:{metrics[key]}")
 
-    def __score(self, batches, save_arr):
+    def score(self, batches, save_arr):
         pass # implement in sub-class
