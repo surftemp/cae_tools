@@ -52,7 +52,9 @@ class BaseModel:
             output_not_norm = output_not_norm.numpy(force=True)
             score_arr = dataset.denormalise_output(score_arr,force=True)
             # feed the instances in each batch into the model metric accumulator
+            batch_size = output_not_norm.shape[0]
             for i in range(batch_size):
+                # print(f"step: {i} size of output_not_norm: {output_not_norm.shape} and score_arr: {score_arr.shape}, batch_size: {batch_size}")
                 mm.accumulate(output_not_norm[i,::],score_arr[i,::])
 
         return mm.get_metrics()
