@@ -19,9 +19,13 @@ import argparse
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("database_path")
+    parser.add_argument("--model-id", type=str, help="Dump details for this specific model", default=None)
     args = parser.parse_args()
     md = ModelDatabase(args.database_path)
-    md.dump()
+    if args.model_id:
+        md.dump_model(model_id=args.model_id)
+    else:
+        md.dump()
 
 if __name__ == '__main__':
     main()
