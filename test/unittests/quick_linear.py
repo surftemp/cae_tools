@@ -15,6 +15,7 @@
 
 import unittest
 import os.path
+import xarray as xr
 
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.model_evaluator import ModelEvaluator
@@ -66,8 +67,12 @@ class LinearTest(unittest.TestCase):
 
         train_path = os.path.join(folder, "train.nc")
         test_path = os.path.join(folder, "test.nc")
+
+        train_ds = xr.open_dataset(train_path)
+        test_ds = xr.open_dataset(test_path)
+
         mt = LinearModel(**hyperparameters)
-        mt.train(input_variables, output_variable, train_path, test_path)
+        mt.train(input_variables, output_variable, train_ds, test_ds, training_paths=train_path, test_paths=test_path)
         print(mt.summary())
 
         results_folder = os.path.join(results_root_folder, test_spec_name, f"{i_h}x{i_w}_{o_h}x{o_w}")

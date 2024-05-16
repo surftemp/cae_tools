@@ -15,6 +15,7 @@
 
 import unittest
 import os.path
+import xarray as xr
 
 from cae_tools.models.conv_ae_model import ConvAEModel
 from cae_tools.models.model_evaluator import ModelEvaluator
@@ -22,7 +23,6 @@ from cae_tools.models.model_evaluator import ModelEvaluator
 import test_specs
 
 data_root_folder = os.path.join(os.path.split(__file__)[0],"..","data")
-
 
 results_root_folder = os.path.join(os.path.split(__file__)[0],"..","results","cae_quick")
 
@@ -61,8 +61,12 @@ class QuickTest(unittest.TestCase):
 
         train_path = os.path.join(folder, "train.nc")
         test_path = os.path.join(folder, "test.nc")
+
+        train_ds = xr.open_dataset(train_path)
+        test_ds = xr.open_dataset(test_path)
+
         mt = ConvAEModel(**hyperparameters)
-        mt.train(input_variables, output_variable, train_path, test_path)
+        mt.train(input_variables, output_variable, train_ds, test_ds, training_paths=train_path, test_paths=test_path)
         print(mt.summary())
 
         results_folder = os.path.join(results_root_folder, test_spec_name, f"{i_h}x{i_w}_{o_h}x{o_w}")
