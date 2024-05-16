@@ -182,21 +182,23 @@ class LinearModel(BaseModel):
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
                 ctr += self.batch_size
 
-    def train(self, input_variables, output_variable, training_path, test_path, model_path=""):
+    def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", test_paths=""):
         """
         Train the model (or continue training)
 
         :param input_variables: names of th input variables in training/test datasets
         :param output_variable: name of the output variable in training/test datasets
-        :param training_path: path to a netcdf4 file containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
-        :param test_path: path to a netcdf4 file to use for testing only.  Format as above
+        :param training_ds: an xarray dataset containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
+        :param testing_ds: an xarray dataset to use for testing only.  Format as above
         :param model_path: path to save model to after training
+        :param training_paths: a string providing a lst of all the training data paths
+        :param test_paths: a string providing a list of all the test data paths
         """
         super().__init__()
-        train_ds = DSDataset(xr.open_dataset(training_path), input_variables, output_variable,
+        train_ds = DSDataset(training_ds, input_variables, output_variable,
                              normalise_in=self.normalise_input, normalise_out=self.normalise_output)
         self.normalisation_parameters = train_ds.get_normalisation_parameters()
-        test_ds = DSDataset(xr.open_dataset(test_path), input_variables, output_variable,
+        test_ds = DSDataset(testing_ds, input_variables, output_variable,
                             normalise_in=self.normalise_input, normalise_out=self.normalise_output)
         test_ds.set_normalisation_parameters(self.normalisation_parameters)
         (input_chan, input_y, input_x) = train_ds.get_input_shape()
@@ -271,7 +273,7 @@ class LinearModel(BaseModel):
 
         if self.db:
             self.db.add_training_result(self.get_model_id(), "Linear", output_variable, input_variables, self.summary(),
-                                        model_path, training_path, train_loss, test_path, test_loss,
+                                        model_path, training_paths, train_loss, test_paths, test_loss,
                                         self.get_parameters(), {})
         if model_path:
             self.save(model_path)
@@ -285,7 +287,7 @@ class LinearModel(BaseModel):
         self.dump_metrics("Train Metrics", metrics["train"])
 
         if self.db:
-            self.db.add_evaluation_result(self.get_model_id(), training_path, test_path, metrics)
+            self.db.add_evaluation_result(self.get_model_id(), training_paths, test_paths, metrics)
 
     def apply(self, input_path, input_variables, output_path, prediction_variable="model_output",
                 channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
