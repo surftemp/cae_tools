@@ -2,6 +2,8 @@ import argparse
 import json
 import os
 
+import xarray as xr
+
 from cae_tools.models.conv_ae_model import ConvAEModel
 from cae_tools.models.var_ae_model import VarAEModel
 from cae_tools.models.linear_model import LinearModel
@@ -11,8 +13,8 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("training_path",help="path to netcdf4 file containing training data")
-    parser.add_argument("test_path", help="path to netcdf4 file containing test data")
+    parser.add_argument("--train-inputs", nargs="+", help="path(s) to netcdf4 file containing training data", required=True)
+    parser.add_argument("--test-inputs", nargs="+", help="path(s) to netcdf4 file containing test data", required=True)
     parser.add_argument("--model-folder", help="folder to save the trained model to",required=True)
     parser.add_argument("--continue-training", action="store_true", help="continue training model")
     parser.add_argument("--input-variables", nargs="+", help="name of the input variable(s) in training/test data", required=True)
@@ -33,6 +35,19 @@ def main():
                         default=None)
 
     args = parser.parse_args()
+
+    train_ds = [xr.open_dataset(train_input) for train_input in args.train_inputs]
+    test_ds = [xr.open_dataset(test_input) for test_input in args.test_inputs]
+    target_dimension = train_ds[0][args.output_variable].dims[0]
+
+
+    train_ds = train_ds[0] if len(train_ds) == 1 else xr.concat(train_ds, dim=target_dimension)
+    test_ds = test_ds[0] if len(test_ds) == 1 else xr.concat(test_ds, dim=target_dimension)
+
+    print("Training cases: %d, Test cases: %d"%(train_ds[target_dimension].shape[0],test_ds[target_dimension].shape[0]))
+
+    training_paths = ";".join(args.train_inputs)
+    test_paths = ";".join(args.test_inputs)
 
     if args.continue_training:
         parameters_path = os.path.join(args.model_folder, "parameters.json")
@@ -70,5 +85,8 @@ def main():
                 spec.load(json.loads(f.read()))
                 mt.spec = spec
 
-    mt.train(args.input_variables, args.output_variable, args.training_path, args.test_path, args.model_folder)
+    mt.train(args.input_variables, args.output_variable, training_ds=train_ds, testing_ds=test_ds, model_path=args.model_folder, training_paths=training_paths,
+             testing_paths=test_paths)
 
+if __name__ == '__main__':
+    main()

@@ -15,6 +15,7 @@
 
 import unittest
 import os.path
+import xarray as xr
 
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.model_evaluator import ModelEvaluator
@@ -66,8 +67,12 @@ class LinearTest(unittest.TestCase):
 
         train_path = os.path.join(folder, "train.nc")
         test_path = os.path.join(folder, "test.nc")
+
+        train_ds = xr.open_dataset(train_path)
+        test_ds = xr.open_dataset(test_path)
+
         mt = LinearModel(**hyperparameters)
-        mt.train(input_variables, output_variable, train_path, test_path)
+        mt.train(input_variables, output_variable, train_ds, test_ds, training_paths=train_path, testing_paths=test_path)
         print(mt.summary())
 
         results_folder = os.path.join(results_root_folder, test_spec_name, f"{i_h}x{i_w}_{o_h}x{o_w}")
@@ -81,8 +86,14 @@ class LinearTest(unittest.TestCase):
         mt2 = LinearModel()
         mt2.load(model_path)
 
-        mt2.apply(train_path, input_variables, train_scores_path, estimated_output_variable)
-        mt2.apply(test_path, input_variables, test_scores_path, estimated_output_variable)
+        train_scores_ds = xr.open_dataset(train_path)
+        mt2.apply(train_scores_ds, input_variables, estimated_output_variable)
+        train_scores_ds.to_netcdf(train_scores_path)
+
+        test_scores_ds = xr.open_dataset(test_path)
+        mt2.apply(test_scores_ds, input_variables, estimated_output_variable)
+        test_scores_ds.to_netcdf(test_scores_path)
+
         evaluation_html_path = os.path.join(results_folder, "model_evaluation.html")
 
         me = ModelEvaluator(train_scores_path, test_scores_path, input_variables[0:1], output_variable, evaluation_html_path,
