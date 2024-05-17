@@ -182,7 +182,7 @@ class LinearModel(BaseModel):
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
                 ctr += self.batch_size
 
-    def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", test_paths=""):
+    def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", testing_paths=""):
         """
         Train the model (or continue training)
 
@@ -192,7 +192,7 @@ class LinearModel(BaseModel):
         :param testing_ds: an xarray dataset to use for testing only.  Format as above
         :param model_path: path to save model to after training
         :param training_paths: a string providing a lst of all the training data paths
-        :param test_paths: a string providing a list of all the test data paths
+        :param testing_paths: a string providing a list of all the test data paths
         """
         super().__init__()
         train_ds = DSDataset(training_ds, input_variables, output_variable,
@@ -287,22 +287,20 @@ class LinearModel(BaseModel):
         self.dump_metrics("Train Metrics", metrics["train"])
 
         if self.db:
-            self.db.add_evaluation_result(self.get_model_id(), training_paths, test_paths, metrics)
+            self.db.add_evaluation_result(self.get_model_id(), training_paths, testing_paths, metrics)
 
-    def apply(self, input_path, input_variables, output_path, prediction_variable="model_output",
+    def apply(self, score_ds, input_variables, prediction_variable="model_output",
                 channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
         """
-        Apply this model to input data to produce an output estimate
+        Apply this model to input data to produce an output estimate, added to extend score_ds
 
-        :param input_path: path to a netcdf4 file containing input data
+        :param score_ds: an xarray dataset containing input data
         :param input_variables: name of the input variables in the input data
-        :param output_path: path to a netcdf4 file to write containing the input data plus a prediction variable
         :param prediction_variable: the name of the prediction variable
         :param channel_dimension: the name of the channel dimension in the prediction variable
         :param y_dimension: the name of the y dimension in the prediction variable
         :param x_dimension: the name of the x dimension in the prediction variable
         """
-        score_ds = xr.open_dataset(input_path)
         n = score_ds[input_variables[0]].shape[0]
         n_dimension = score_ds[input_variables[0]].dims[0]
         out_chan = self.output_shape[0]
@@ -330,7 +328,6 @@ class LinearModel(BaseModel):
         score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
                 dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
 
-        score_ds.to_netcdf(output_path)
 
     def summary(self):
         """

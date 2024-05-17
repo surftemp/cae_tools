@@ -5,7 +5,7 @@
 
 here=`dirname $0`
 
-NR_EPOCHS=20
+NR_EPOCHS=200
 
 # for each supported method, go through the train, apply, evaluate, retrain, apply, evaluate cycle
 

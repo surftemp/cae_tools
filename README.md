@@ -30,9 +30,9 @@ pip install -e .
 To train:
 
 ```
-train_cae test/data/16x16_256x256/train.nc test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variables lowres --output-variable=hires --nr-epochs=500 --method conv       
+train_cae --train-inputs test/data/16x16_256x256/train.nc --test-inputs test/data/16x16_256x256/test.nc --model-folder=/tmp/mymodel --input-variables lowres --output-variable=hires --nr-epochs=500 --method conv       
 ```
-method options are "conv" or "var" for convolutional autoencder or variational autoencoder
+method options are "conv" or "var" for convolutional autoencder or variational autoencoder, "linear" for a simple linear model
 
 Useful training parameters:
 
@@ -73,16 +73,19 @@ For help, run `train_cae --help` or `apply_cae --help`
 See source code for ConvAEModel for documentation 
 
 ```python
-
+import xarray as xr
 from cae_tools.models.conv_ae_model import ConvAEModel
-from cae_tools.utils.evaluate import ModelEvaluator
+from cae_tools.models.model_evaluator import ModelEvaluator
 
 train_path = "train.nc"
 test_path = "test.nc"
 
 # train the model to reconstruct variable "hires" from variable "lowres"
 mt = ConvAEModel(fc_size=8, encoded_dim_size=4, nr_epochs=500)
-mt.train(["lowres"], "hires", train_path, test_path)
+
+train_ds = xr.open_dataset(train_path)
+test_ds = xr.open_dataset(test_path)
+mt.train(["lowres"], "hires", training_ds=train_ds, testing_ds=test_ds, training_paths=train_path, testing_paths=test_path)
 
 # print a summary of the layers
 print(mt.summary())
