@@ -96,8 +96,12 @@ mt.save("/tmp/mymodel")
 # now reload the trained model to create estimates of the "hires" variable from the train/test datasets
 mt2 = ConvAEModel()
 mt2.load("/tmp/mymodel")
-mt2.apply(train_path, ["lowres"], "train_scores.nc", "hires_estimate")
-mt2.apply(test_path, ["lowres"], "test_scores.nc", "hires_estimate")
+
+mt2.apply(train_ds, ["lowres"], "hires_estimate")
+train_ds.to_netcdf( "train_scores.nc")
+
+mt2.apply(test_ds, ["lowres"], "hires_estimate")
+test_ds.to_netcdf("test_scores.nc")
 
 # perform model evaluation, write results to evaluation_results.html
 me = ModelEvaluator("train_scores.nc","test_scores.nc",["lowres"],"hires","evaluation_results.html","hires_estimate","/tmp/mymodel")
