@@ -18,8 +18,10 @@ import torch
 from torchvision import transforms
 from torch.utils.data import DataLoader
 import numpy as np
+import xarray as xr
 
 from .model_metric import ModelMetric
+from .ds_dataset import DSDataset
 
 class BaseModel:
 
@@ -59,10 +61,84 @@ class BaseModel:
 
         return mm.get_metrics()
 
+    def apply(self, score_ds, input_variables, prediction_variable="model_output",
+                channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
+        """
+        Apply this model to input data to produce an output estimate, added to extend score_ds
+
+        :param score_ds: an xarray dataset containing input data
+        :param input_variables: name of the input variables in the input data
+        :param prediction_variable: the name of the prediction variable
+        :param channel_dimension: the name of the channel dimension in the prediction variable
+        :param y_dimension: the name of the y dimension in the prediction variable
+        :param x_dimension: the name of the x dimension in the prediction variable
+        """
+
+        # print("Input variables:", score_ds)
+        # print("First item in input_variables:", input_variables[0])
+
+        n = score_ds[input_variables[0]].shape[0]
+        n_dimension = score_ds[input_variables[0]].dims[0]
+        out_chan = self.output_shape[0]
+        out_y = self.output_shape[1]
+        out_x = self.output_shape[2]
+        score_arr = np.zeros(shape=(n,out_chan,out_y,out_x))
+
+        ds = DSDataset(score_ds, input_variables, input_variables[0], normalise_in=self.normalise_input)
+        ds.set_normalisation_parameters(self.normalisation_parameters)
+        val_loader = torch.utils.data.DataLoader(ds, batch_size=self.batch_size)
+
+        if self.use_gpu:
+            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+        else:
+            device = torch.device("cpu")
+
+        self.encoder.to(device)
+        self.decoder.to(device)
+
+        score_batches = []
+        for low_res, _, _ in val_loader:
+            low_res = low_res.to(device)
+            score_batches.append(low_res)
+
+        self.score(score_batches, save_arr=score_arr)
+        score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
+                dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
+
+
     def dump_metrics(self, title, metrics):
         print("\n"+title)
         for key in metrics:
             print(f"\t{key:30s}:{metrics[key]}")
 
     def score(self, batches, save_arr):
+        pass # implement in sub-class
+
+    def save(self, to_folder):
+        pass  # implement in sub-class
+
+    def load(self, from_folder):
+        pass  # implement in sub-class
+
+    def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", testing_paths=""):
+        """
+        Train the model (or continue training)
+
+        :param input_variables: names of th input variables in training/test datasets
+        :param output_variable: name of the output variable in training/test datasets
+        :param training_ds: an xarray dataset containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
+        :param testing_ds: an xarray dataset to use for testing only.  Format as above
+        :param model_path: path to save model to after training
+        :param training_paths: a string providing a lst of all the training data paths
+        :param testing_paths: a string providing a list of all the test data paths
+        """
+        pass # implement in sub-class
+
+    def summary(self):
+        """
+        Print a summary of the encoder/input and decoder/output layers
+        """
+        pass # implement in sub-class
+
+    def get_parameters(self):
         pass # implement in sub-class

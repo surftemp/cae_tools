@@ -40,10 +40,11 @@ def main():
     test_ds = [xr.open_dataset(test_input) for test_input in args.test_inputs]
     target_dimension = train_ds[0][args.output_variable].dims[0]
 
+
     train_ds = train_ds[0] if len(train_ds) == 1 else xr.concat(train_ds, dim=target_dimension)
     test_ds = test_ds[0] if len(test_ds) == 1 else xr.concat(test_ds, dim=target_dimension)
 
-    print(train_ds)
+    print("Training cases: %d, Test cases: %d"%(train_ds[target_dimension].shape[0],test_ds[target_dimension].shape[0]))
 
     training_paths = ";".join(args.train_inputs)
     test_paths = ";".join(args.test_inputs)
@@ -84,5 +85,8 @@ def main():
                 spec.load(json.loads(f.read()))
                 mt.spec = spec
 
-    mt.train(args.input_variables, args.output_variable, train_ds, test_ds, args.model_folder, training_paths, test_paths)
+    mt.train(args.input_variables, args.output_variable, training_ds=train_ds, testing_ds=test_ds, model_path=args.model_folder, training_paths=training_paths,
+             testing_paths=test_paths)
 
+if __name__ == '__main__':
+    main()
