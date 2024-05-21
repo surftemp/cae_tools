@@ -80,7 +80,7 @@ class UNET(BaseModel):
 
     def get_parameters(self):
         return {
-            "type": "ConvAEModel",
+            "type": "UNET",
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "batch_size": self.batch_size,
