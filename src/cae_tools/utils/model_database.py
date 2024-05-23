@@ -33,6 +33,7 @@ class ModelDatabase:
     def add_evaluation_result(self, model_id, train_path, test_path, metrics):
         curs = self.conn.cursor()
         dt_now = datetime.datetime.now()
+        print(model_id,train_path,test_path,metrics)
         curs.execute("INSERT INTO MODEL_EVALUATIONS VALUES(?,?,?,?,?)", (
             dt_now, model_id, train_path, test_path, json.dumps(metrics)))
         self.conn.commit()
