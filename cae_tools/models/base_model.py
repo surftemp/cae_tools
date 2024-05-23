@@ -19,6 +19,8 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import numpy as np
 import xarray as xr
+import os
+import json
 
 from .model_metric import ModelMetric
 from .ds_dataset import DSDataset
@@ -26,7 +28,31 @@ from .ds_dataset import DSDataset
 class BaseModel:
 
     def __init__(self):
+        self.input_spec = None
+        self.output_spec = None
         self.model_id = str(uuid.uuid4())
+
+    def set_input_spec(self, input_spec):
+        self.input_spec = input_spec
+
+    def get_input_spec(self):
+        return self.input_spec
+
+    def set_output_spec(self, output_spec):
+        self.output_spec = output_spec
+
+    def get_output_spec(self):
+        return self.output_spec
+
+    def get_input_variable_names(self):
+        if self.input_spec is None:
+            return None
+        return [item["name"] for item in self.input_spec]
+
+    def get_output_variable_name(self):
+        if self.output_spec is None:
+            return None
+        return self.output_spec["name"]
 
     def set_model_id(self, model_id):
         self.model_id = model_id
@@ -34,7 +60,7 @@ class BaseModel:
     def get_model_id(self):
         return self.model_id
 
-    def evaluate(self, dataset, device, batch_size):
+    def evaluate(self, dataset, device):
 
         # common code across the models to collect metrics
 
@@ -45,7 +71,7 @@ class BaseModel:
         ])
 
         mm = ModelMetric()
-        loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
         for input, output_not_norm, labels in loader:
             # for each batch, score, denormalise the scores and compare with the original outputs
             input = input.to(device)
@@ -105,7 +131,6 @@ class BaseModel:
         score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
                 dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
 
-
     def dump_metrics(self, title, metrics):
         print("\n"+title)
         for key in metrics:
@@ -115,10 +140,24 @@ class BaseModel:
         pass # implement in sub-class
 
     def save(self, to_folder):
-        pass  # implement in sub-class
+        if self.input_spec is not None:
+            input_spec_path = os.path.join(to_folder, "input_spec.json")
+            with open(input_spec_path,"w") as f:
+                f.write(json.dumps(self.input_spec))
+        if self.output_spec is not None:
+            output_spec_path = os.path.join(to_folder, "output_spec.json")
+            with open(output_spec_path,"w") as f:
+                f.write(json.dumps(self.output_spec))
 
     def load(self, from_folder):
-        pass  # implement in sub-class
+        input_spec_path = os.path.join(from_folder,"input_spec.json")
+        if os.path.exists(input_spec_path):
+            with open(input_spec_path) as f:
+                self.input_spec = json.loads(f.read())
+        output_spec_path = os.path.join(from_folder, "output_spec.json")
+        if os.path.exists(output_spec_path):
+            with open(output_spec_path) as f:
+                self.output_spec = json.loads(f.read())
 
     def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", testing_paths=""):
         """

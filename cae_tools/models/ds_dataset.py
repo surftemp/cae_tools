@@ -25,6 +25,8 @@ class DSDataset(torch.utils.data.Dataset):
         self.output_variable_name = output_variable_name
         self.normalise_in = normalise_in
         self.normalise_out = normalise_out
+        self.input_spec = []
+        self.output_spec = None
 
         self.input_das = [self.ds[input_variable_name] for input_variable_name in input_variable_names]
 
@@ -50,6 +52,7 @@ class DSDataset(torch.utils.data.Dataset):
             count_nans = np.sum(np.where(np.isnan(input_da.values), 1, 0))
             if count_nans > 0:
                 raise ValueError(f"input variable {input_name} contains {count_nans} NaN values")
+            self.input_spec.append({"name":input_name,"shape":list(input_da.shape[1:])})
 
         if self.output_variable_name:
             self.output_da = self.ds[self.output_variable_name]
@@ -58,6 +61,7 @@ class DSDataset(torch.utils.data.Dataset):
             self.output_x = self.output_da.shape[3]
             self.min_output = float(np.nanmin(self.output_da.values))
             self.max_output = float(np.nanmax(self.output_da.values))
+            self.output_spec = {"name":self.output_variable_name,"shape":list(self.output_da.shape[1:])}
         else:
             self.output_da = None
             self.output_chan = None
@@ -78,8 +82,14 @@ class DSDataset(torch.utils.data.Dataset):
     def get_input_shape(self):
         return (self.input_chan, self.input_y, self.input_x)
 
+    def get_input_spec(self):
+        return self.input_spec
+
     def get_output_shape(self):
         return (self.output_chan, self.output_y, self.output_x)
+
+    def get_output_spec(self):
+        return self.output_spec
 
     def normalise_input(self, arr, input_name):
         if self.normalise_in:
