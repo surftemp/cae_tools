@@ -15,16 +15,15 @@
 
 import xarray as xr
 import os
-from PIL import Image
-from matplotlib import cm
+import shutil
 import numpy as np
 import seaborn as sns
-import datetime
 import pandas as pd
 import math
 import json
 import tempfile
 import torch
+import random
 
 from ..utils.html5.html5_builder import Html5Builder
 from ..utils.table_fragment import TableFragment
@@ -38,22 +37,36 @@ from cae_tools.models.conv_ae_model import ConvAEModel
 from cae_tools.models.var_ae_model import VarAEModel
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.unet import UNET
-from cae_tools.utils.layers import LayerFactory, LayerSingleBand
+from cae_tools.utils.layers import LayerFactory, LayerSingleBand, LayerWMS
 
 from cae_tools.models.ds_dataset import DSDataset
 
+osm_wms_url="https://eocis.org/mapproxy/service?service=WMS&request=GetMap&layers=osm&styles=&format=image%2Fpng&transparent=false&version=1.1.1&width={WIDTH}&height={HEIGHT}&srs=EPSG%3A27700&bbox={XMIN},{YMIN},{XMAX},{YMAX}"
+
 class ModelEvaluator:
 
-    def __init__(self, training_paths, testing_paths, layer_config_path="", output_html_path="", model_output_variable="", model_path="",
-                 database_path=""):
+    def __init__(self, training_paths, testing_paths, layer_config_path="", output_html_folder="", model_output_variable="",
+                 time_variable="", model_path="",
+                 database_path="", with_osm=False, case_sample_fraction=0.0, coordinates=None):
         self.training_paths = training_paths if training_paths else []
         self.testing_paths = testing_paths if testing_paths else []
         self.layer_config_path = layer_config_path
-        self.output_html_path = output_html_path
+        self.output_html_folder = output_html_folder
+        self.output_html_path = "" if not self.output_html_folder else os.path.join(self.output_html_folder,"index.html")
         self.model_path = model_path
         self.model_output_variable = model_output_variable
         self.database_path = database_path
         self.db = ModelDatabase(database_path) if database_path else None
+        self.time_variable = time_variable
+        self.with_osm = with_osm
+        self.case_sample_fraction = case_sample_fraction
+        self.coordinates = coordinates
+
+        if self.with_osm and not self.coordinates:
+            raise Exception("need to supply --coordinates if --with-osm is specified")
+
+        if self.output_html_folder:
+            os.makedirs(self.output_html_folder, exist_ok=True)
 
         parameters_path = os.path.join(self.model_path, "parameters.json")
         with open(parameters_path) as f:
@@ -152,8 +165,19 @@ class ModelEvaluator:
             for name in ds.variables:
                 variable_names.add(name)
 
-        image_folder = os.path.join(os.path.split(self.output_html_path)[0], "images")
-        os.makedirs(image_folder,exist_ok=True)
+        # check the coordinates are 2D variables with the case dimension as the first one
+        if self.coordinates:
+            x_dims = ds[self.coordinates[0]].dims
+            y_dims = ds[self.coordinates[1]].dims
+            if len(x_dims) != 2 or x_dims[0] != case_dimension:
+                raise Exception("inconsistent x-coordinate specified in --coordinates")
+            if len(y_dims) != 2 or y_dims[0] != case_dimension:
+                raise Exception("inconsistent y-coordinate specified in --coordinates")
+
+        image_folder = os.path.join(self.output_html_folder, "images")
+        if os.path.exists(image_folder):
+            shutil.rmtree(image_folder)
+        os.makedirs(image_folder)
 
         layer_definitions = []
         if self.layer_config_path:
@@ -186,8 +210,6 @@ class ModelEvaluator:
                 training_losses = json.loads(f.read())
             with open(os.path.join(self.model_path,"parameters.json")) as f:
                 training_parameters = json.loads(f.read())
-
-        plot_variables = self.input_variables+[self.output_variable,self.model_output_variable]
 
         image_width=256
 
@@ -224,6 +246,8 @@ class ModelEvaluator:
                     vmin = target_vmin
                     vmax = target_vmax
                 layer_definitions.append(LayerSingleBand(v,v,v,vmin,vmax,"coolwarm"))
+            if self.with_osm is not None:
+                layer_definitions.append(LayerWMS("osm","osm",osm_wms_url,2,self.coordinates[0],self.coordinates[1]))
 
         for (partition,ds) in [("test",test_ds),("train",train_ds)]:
             if ds is None:
@@ -271,8 +295,9 @@ class ModelEvaluator:
                 table_measures = []
 
             layer_labels = []
-            if "time" in ds:
+            if self.time_variable and self.time_variable in ds:
                 layer_labels.append("time")
+
             for layer_definition in layer_definitions:
                 layer_labels.append(layer_definition.layer_label)
 
@@ -280,17 +305,30 @@ class ModelEvaluator:
             tbl.add_row(layer_labels+table_measures+aux_inputs)
 
             for (idx,measure_values) in computed_measures:
+
+                if self.case_sample_fraction is not None:
+                    if random.random() > self.case_sample_fraction:
+                        continue
+
                 ds_slice = ds.isel(**{case_dimension:idx})
+
+                flip=False
+                if self.coordinates:
+                    y_first = float(ds_slice[self.coordinates[1]].data[0])
+                    y_last = float(ds_slice[self.coordinates[1]].data[-1])
+                    if y_first < y_last:
+                        # flip
+                        flip=True
+
                 cells = []
-                if "time" in ds:
-                    time = ds_slice["time"].astype(str)[0]
-                    cells.append(str(time))
+                if self.time_variable and self.time_variable in ds:
+                    cell_time = str(ds_slice[self.time_variable].astype(str).data)[:16] # cut out seconds
+                    cells.append(cell_time)
                 for layer_definition in layer_definitions:
-                    img_filename = f"{layer_definition.layer_name}_{idx}.png"
+                    img_filename = f"{layer_definition.layer_name}_{partition}_{idx}.png"
                     img_path = os.path.join(image_folder,img_filename)
                     with tempfile.NamedTemporaryFile(suffix=".png") as p:
-
-                        layer_definition.build(ds_slice,img_path)
+                        layer_definition.build(ds_slice,img_path,flip=flip)
                         cells.append(ImageFragment(f"images/{img_filename}",w=image_width))
 
                 for measure in table_measures:
