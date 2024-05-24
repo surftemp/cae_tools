@@ -62,17 +62,6 @@ def save_image_mask(arr, path, r, g, b):
     im = Image.fromarray(rgba_arr, mode="RGBA")
     im.save(path)
 
-def get_image_dimensions(ds):
-    if len(ds.lat.shape) == 2:
-        image_height = ds.lat.shape[0]
-        image_width = ds.lon.shape[1]
-    elif len(ds.lat.shape) == 1:
-        image_height = ds.lat.shape[0]
-        image_width = ds.lon.shape[1]
-    else:
-        raise Exception("Unable to determine image dimensions from dataset")
-    return (image_width, image_height)
-
 
 class LayerRGB:
 
@@ -91,11 +80,15 @@ class LayerRGB:
             if variable not in ds:
                 return f"No variable {variable}"
 
-    def build(self,ds,path):
+    def build(self,ds,path,flip):
         red = ds[self.red_variable].squeeze().data[:, :]
         green = ds[self.green_variable].squeeze().data[:, :]
         blue = ds[self.blue_variable].squeeze().data[:, :]
 
+        if flip:
+            red = np.flipid(red)
+            green = np.flipud(green)
+            blue = np.flipud(blue)
         save_image_falsecolour(red, green, blue, path)
 
 
@@ -113,9 +106,12 @@ class LayerSingleBand:
         if self.band_name not in ds:
             return f"No variable {self.band_name}"
 
-    def build(self,ds,path):
+    def build(self,ds,path,flip=False):
         da = ds[self.band_name]
-        save_image(da.squeeze().data[:, :], self.vmin, self.vmax, path, self.cmap_name)
+        arr = da.squeeze().data[:, :]
+        if flip:
+            arr = np.flipud(arr)
+        save_image(arr, self.vmin, self.vmax, path, self.cmap_name)
 
     def has_legend(self):
         return True
@@ -148,10 +144,9 @@ class LayerWMS:
             if variable not in ds:
                 return f"No variable {variable}"
 
-    def build(self,ds,path):
-        if os.path.exists(path):
-            os.remove(path)
-        image_width, image_height = get_image_dimensions(ds)
+    def build(self,ds,path,flip=False):
+        image_width = ds[self.x_coords].shape[0]
+        image_height = ds[self.y_coords].shape[0]
         image_width *= self.scale
         image_height *= self.scale
 
@@ -177,15 +172,14 @@ class LayerWMS:
         elif url in self.failed:
             pass
         else:
-            print(url)
             r = requests.get(url, stream=True)
             if r.status_code == 200:
                 with open(path, 'wb') as f:
                     r.raw.decode_content = True
                     shutil.copyfileobj(r.raw, f)
-                self.cache[url] = path
+                self.cache[url] = os.path.split(path)[-1]
             else:
-                print("Failed")
+                print(f"Warning - failed to load from {url}")
                 self.failed.add(url)
 
 class LayerMask:
@@ -206,11 +200,14 @@ class LayerMask:
         if self.band_name not in ds:
             return f"No variable {self.band_name}"
 
-    def build(self,ds,path):
+    def build(self,ds,path,flip):
         da = ds[self.band_name].astype(int)
         if self.mask:
             da = da & self.mask
-        save_image_mask(da.squeeze().data[:, :], path, self.r, self.g, self.b)
+        arr = da.squeeze().data[:, :]
+        if flip:
+            arr = np.flipud(arr)
+        save_image_mask(arr, path, self.r, self.g, self.b)
 
 class LayerFactory:
 
