@@ -15,16 +15,15 @@
 
 import xarray as xr
 import os
-from PIL import Image
-from matplotlib import cm
+import shutil
 import numpy as np
 import seaborn as sns
-import datetime
 import pandas as pd
 import math
 import json
 import tempfile
 import torch
+import random
 
 from ..utils.html5.html5_builder import Html5Builder
 from ..utils.table_fragment import TableFragment
@@ -39,6 +38,8 @@ from cae_tools.models.unet import UNET
 
 from cae_tools.models.ds_dataset import DSDataset
 
+osm_wms_url="https://eocis.org/mapproxy/service?service=WMS&request=GetMap&layers=osm&styles=&format=image%2Fpng&transparent=false&version=1.1.1&width={WIDTH}&height={HEIGHT}&srs=EPSG%3A27700&bbox={XMIN},{YMIN},{XMAX},{YMAX}"
+
 class ModelEvaluator:
 
     def __init__(self, training_paths, testing_paths, output_html_folder="", model_output_variable="", model_path="",
@@ -46,10 +47,12 @@ class ModelEvaluator:
         self.training_paths = training_paths if training_paths else []
         self.testing_paths = testing_paths if testing_paths else []
         self.output_html_folder = output_html_folder
+
         self.model_path = model_path
         self.model_output_variable = model_output_variable
         self.database_path = database_path
         self.db = ModelDatabase(database_path) if database_path else None
+
         self.input_variables = input_variables if input_variables is not None else []
         self.sample_count = sample_count
         self.x_coordinate = x_coordinate
@@ -58,6 +61,7 @@ class ModelEvaluator:
 
         if self.output_html_folder:
             self.output_html_path = os.path.join(self.output_html_folder,"index.html")
+
 
         parameters_path = os.path.join(self.model_path, "parameters.json")
         with open(parameters_path) as f:
@@ -161,8 +165,10 @@ class ModelEvaluator:
             for name in ds.variables:
                 variable_names.add(name)
 
+
         image_folder = os.path.join(self.output_html_folder, "images")
         os.makedirs(image_folder,exist_ok=True)
+
 
         builder = Html5Builder(language="en")
 
@@ -239,6 +245,7 @@ class ModelEvaluator:
                 else:
                     vmin = target_vmin
                     vmax = target_vmax
+
                 converter_config["layers"][v] = {
                     "label": v,
                     "type": "single",
@@ -246,6 +253,7 @@ class ModelEvaluator:
                     "max_value": vmax,
                     "cmap": "coolwarm"
                 }
+
 
         for (partition,ds) in [("test",test_ds),("train",train_ds)]:
             if ds is None:
@@ -283,6 +291,7 @@ class ModelEvaluator:
                         fig = plot.get_figure()
                         fig.savefig(p.name)
                         fig.clear()
+
                         builder.body().add_fragment(InlineImageFragment(p.name))
 
             case_output_folder=os.path.join(self.output_html_folder,partition)
