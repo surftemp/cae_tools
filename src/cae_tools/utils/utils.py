@@ -16,17 +16,6 @@
 def prepare_attrs(d):
     return {k:str(v) for (k,v) in d.items() if v is not None}
 
-def add_exo_dependencies(head_fragment,exo_version="latest"):
-
-    head_fragment.add_element("link",{"href":"//fonts.googleapis.com/css?family=Raleway:400,300,600",
-                                 "rel":"stylesheet", "type":"text/css"})
-    head_fragment.add_element("link", {"href": "https://visual-topology.github.io/exo/versions/%s/exo.css"%str(exo_version),
-                                  "rel": "stylesheet", "type": "text/css"})
-    head_fragment.add_element("link", {"href": "https://visual-topology.github.io/exo/versions/%s/exo-icons.css" % str(exo_version),
-                                  "rel": "stylesheet", "type": "text/css"})
-    head_fragment.add_element("script", {"src":"https://visual-topology.github.io/exo/versions/%s/exo.js"%str(exo_version),
-                                                                    "type":"text/javascript"})
-
 anti_aliasing_style = """
 img { 
     image-rendering: optimizeSpeed;             /* STOP SMOOTHING, GIVE ME SPEED  */
