@@ -14,6 +14,7 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import argparse
+import json
 
 from cae_tools.models.model_evaluator import ModelEvaluator
 
@@ -22,27 +23,34 @@ def main():
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("training_path",help="path to netcdf4 file containing training data")
-    parser.add_argument("test_path", help="path to netcdf4 file containing test data")
-    parser.add_argument("output_html_path", help="path to write output html to")
+    parser.add_argument("--train-inputs", nargs="+", help="path to netcdf4 file(s) containing training data")
+    parser.add_argument("--test-inputs", nargs="+", help="path to netcdf4 file(s) containing test data")
 
-    parser.add_argument("--input-variables", nargs="+", help="name of the input variable(s) in training/test data", required=True)
-    parser.add_argument("--output-variable", help="name of the output variable in training/test data", required=True)
-
-    parser.add_argument("--model-folder", help="folder to save the trained model to", default="")
+    parser.add_argument("--output-html-folder", help="folder to write output html to",default="")
+    parser.add_argument("--input-variables", nargs="*", help="input variables to plot")
+    parser.add_argument("--sample-count", type=int, help="fraction of cases to plot for each partition", default=None)
+    parser.add_argument("--model-folder", help="folder to save the trained model to", required=True)
     parser.add_argument("--prediction-variable", help="name of the prediction variable to create in output data",
-                       default="")
+                       default=None)
+    parser.add_argument("--x-coordinate", help="name of the x-coordinate", default=None)
+    parser.add_argument("--y-coordinate", help="name of the y-coordinate", default=None)
+    parser.add_argument("--time-coordinate", help="name of the time-coordinate", default=None)
+
 
     parser.add_argument("--database-path", type=str, help="path to a database to store evaluation results", default=None)
 
     args = parser.parse_args()
 
-    mt = ModelEvaluator(train_path=args.training_path,
-                        test_path=args.test_path,
-                        input_variables=args.input_variables,
-                        output_variable=args.output_variable,
-                        output_html_path=args.output_html_path,
+    mt = ModelEvaluator(training_paths=args.train_inputs,
+                        testing_paths=args.test_inputs,
+                        output_html_folder=args.output_html_folder,
                         model_path=args.model_folder,
                         model_output_variable=args.prediction_variable,
-                        database_path=args.database_path)
+                        input_variables=args.input_variables,
+                        sample_count=args.sample_count,
+                        database_path=args.database_path,
+                        x_coordinate=args.x_coordinate,
+                        y_coordinate=args.y_coordinate,
+                        time_coordinate=args.time_coordinate)
+
     mt.run()

@@ -33,6 +33,7 @@ class ModelDatabase:
     def add_evaluation_result(self, model_id, train_path, test_path, metrics):
         curs = self.conn.cursor()
         dt_now = datetime.datetime.now()
+        print(model_id,train_path,test_path,metrics)
         curs.execute("INSERT INTO MODEL_EVALUATIONS VALUES(?,?,?,?,?)", (
             dt_now, model_id, train_path, test_path, json.dumps(metrics)))
         self.conn.commit()
@@ -65,11 +66,12 @@ class ModelDatabase:
         }
 
     def dump_row(self, training_row, evaluation_row=None):
-        model_id = training_row["model_id"]
-        model_type = training_row['model_type']
-        test_loss = training_row['test_loss']
-        train_loss = training_row['train_loss']
-        input_variables = training_row["input_variables"]
+        model_id = training_row.get("model_id","")
+        model_type = training_row.get("model_type","")
+
+        test_loss = training_row.get("test_loss","")
+        train_loss = training_row.get("train_loss","")
+        input_variables = training_row.get("input_variables","")
         test_mse = evaluation_row["test_mse"] if evaluation_row is not None else ""
         train_mse = evaluation_row["train_mse"] if evaluation_row is not None else ""
         test_mae = evaluation_row["test_mae"] if evaluation_row is not None else ""
@@ -130,10 +132,7 @@ class ModelDatabase:
                     if idx == 0:
                         self.dump_row(row,eval_row)
                     else:
-                        self.dump_row({
-                            "model_id": "ModelID",
-                            "model_type": "ModelType"
-                        },eval_row)
+                        self.dump_row({},eval_row)
 
         print()
 

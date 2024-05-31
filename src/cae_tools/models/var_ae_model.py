@@ -146,6 +146,7 @@ class VarAEModel(BaseModel):
         summary_path = os.path.join(to_folder, "summary.txt")
         with open(summary_path, "w") as f:
             f.write(self.summary())
+        super().save(to_folder)
 
     def load(self, from_folder):
         """
@@ -194,6 +195,8 @@ class VarAEModel(BaseModel):
         decoder_path = os.path.join(from_folder, "decoder.weights")
         self.decoder.load_state_dict(torch.load(decoder_path))
         self.decoder.eval()
+        super().load(from_folder)
+
 
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
@@ -381,6 +384,9 @@ class VarAEModel(BaseModel):
         """
         train_ds = DSDataset(training_ds, input_variables, output_variable,
                              normalise_in=self.normalise_input, normalise_out=self.normalise_output)
+        self.set_input_spec(train_ds.get_input_spec())
+        self.set_output_spec(train_ds.get_output_spec())
+
         self.normalisation_parameters = train_ds.get_normalisation_parameters()
         test_ds = DSDataset(testing_ds, input_variables, output_variable,
                             normalise_in=self.normalise_input, normalise_out=self.normalise_output)
@@ -472,7 +478,7 @@ class VarAEModel(BaseModel):
 
         if self.db:
             self.db.add_training_result(self.get_model_id(), "VarAE", output_variable, input_variables, self.summary(),
-                                        model_path, training_paths, train_loss, test_paths, test_loss,
+                                        model_path, training_paths, train_loss, testing_paths, test_loss,
                                         self.get_parameters(), self.spec.save())
         if model_path:
             self.save(model_path)
@@ -480,8 +486,8 @@ class VarAEModel(BaseModel):
         # pass over the training and test sets and calculate model metrics
 
         metrics = {}
-        metrics["test"] = self.evaluate(test_ds, device, self.batch_size)
-        metrics["train"] = self.evaluate(train_ds, device, self.batch_size)
+        metrics["test"] = self.evaluate(test_ds, device)
+        metrics["train"] = self.evaluate(train_ds, device)
         self.dump_metrics("Test Metrics", metrics["test"])
         self.dump_metrics("Train Metrics", metrics["train"])
 

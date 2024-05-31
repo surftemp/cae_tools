@@ -38,13 +38,12 @@ def main():
 
     train_ds = [xr.open_dataset(train_input) for train_input in args.train_inputs]
     test_ds = [xr.open_dataset(test_input) for test_input in args.test_inputs]
-    target_dimension = train_ds[0][args.output_variable].dims[0]
+    case_dimension = train_ds[0][args.output_variable].dims[0]
 
+    train_ds = train_ds[0] if len(train_ds) == 1 else xr.concat(train_ds, dim=case_dimension)
+    test_ds = test_ds[0] if len(test_ds) == 1 else xr.concat(test_ds, dim=case_dimension)
 
-    train_ds = train_ds[0] if len(train_ds) == 1 else xr.concat(train_ds, dim=target_dimension)
-    test_ds = test_ds[0] if len(test_ds) == 1 else xr.concat(test_ds, dim=target_dimension)
-
-    print("Training cases: %d, Test cases: %d"%(train_ds[target_dimension].shape[0],test_ds[target_dimension].shape[0]))
+    print("Training cases: %d, Test cases: %d"%(train_ds[case_dimension].shape[0],test_ds[case_dimension].shape[0]))
 
     training_paths = ";".join(args.train_inputs)
     test_paths = ";".join(args.test_inputs)
