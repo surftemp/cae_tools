@@ -105,7 +105,6 @@ class ModelEvaluator:
         train_ds = [xr.open_dataset(training_path) for training_path in self.training_paths]
         test_ds = [xr.open_dataset(testing_path) for testing_path in self.testing_paths]
 
-
         case_dimension = train_ds[0][self.output_variable].dims[0] if len(train_ds) else test_ds[0][self.output_variable].dims[0]
 
         train_ds_count = len(train_ds)

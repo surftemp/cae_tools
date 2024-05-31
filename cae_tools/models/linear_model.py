@@ -286,8 +286,8 @@ class LinearModel(BaseModel):
         # pass over the training and test sets and calculate model metrics
 
         metrics = {}
-        metrics["test"] = self.evaluate(test_ds, device, self.batch_size)
-        metrics["train"] = self.evaluate(train_ds, device, self.batch_size)
+        metrics["test"] = self.evaluate(test_ds, device)
+        metrics["train"] = self.evaluate(train_ds, device)
         self.dump_metrics("Test Metrics", metrics["test"])
         self.dump_metrics("Train Metrics", metrics["train"])
 
