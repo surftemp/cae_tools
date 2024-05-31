@@ -16,7 +16,7 @@
 from .html5.html5_builder import Html5Builder, Fragment, ElementFragment
 import base64
 
-from .utils import add_exo_dependencies, prepare_attrs
+from .utils import prepare_attrs
 
 
 class ImageFragment(ElementFragment):
