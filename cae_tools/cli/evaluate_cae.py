@@ -25,6 +25,7 @@ def main():
 
     parser.add_argument("--train-inputs", nargs="+", help="path to netcdf4 file(s) containing training data")
     parser.add_argument("--test-inputs", nargs="+", help="path to netcdf4 file(s) containing test data")
+
     parser.add_argument("--output-html-folder", help="folder to write output html to",default="")
     parser.add_argument("--input-variables", nargs="*", help="input variables to plot")
     parser.add_argument("--sample-count", type=int, help="fraction of cases to plot for each partition", default=None)
@@ -34,6 +35,7 @@ def main():
     parser.add_argument("--x-coordinate", help="name of the x-coordinate", default=None)
     parser.add_argument("--y-coordinate", help="name of the y-coordinate", default=None)
     parser.add_argument("--time-coordinate", help="name of the time-coordinate", default=None)
+
 
     parser.add_argument("--database-path", type=str, help="path to a database to store evaluation results", default=None)
 
@@ -50,4 +52,5 @@ def main():
                         x_coordinate=args.x_coordinate,
                         y_coordinate=args.y_coordinate,
                         time_coordinate=args.time_coordinate)
+
     mt.run()
