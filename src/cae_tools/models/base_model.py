@@ -64,8 +64,10 @@ class BaseModel:
 
         # common code across the models to collect metrics
 
-        self.encoder.to(device)
-        self.decoder.to(device)
+        if hasattr(self,"encoder"):
+            self.encoder.to(device)
+        if hasattr(self,"decoder"):
+            self.decoder.to(device)
 
         dataset.set_normalise_output(False) # need to avoid normalising outputs when accessing the dataset
 
