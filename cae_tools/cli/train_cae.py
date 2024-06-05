@@ -5,6 +5,7 @@ import os
 import xarray as xr
 
 from cae_tools.models.conv_ae_model import ConvAEModel
+from cae_tools.models.unet import UNET
 from cae_tools.models.var_ae_model import VarAEModel
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.model_sizer import ModelSpec
