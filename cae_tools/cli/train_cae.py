@@ -55,6 +55,8 @@ def main():
 
         if parameters["type"] == "ConvAEModel":
             mt = ConvAEModel()
+        elif parameters["type"] == "UNET":
+            mt = UNET()
         elif parameters["type"] == "VarAEModel":
             mt = VarAEModel()
         elif parameters["type"] == "LinearModel":
@@ -71,6 +73,9 @@ def main():
         elif args.method == "var":
             mt = VarAEModel(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                         batch_size=args.batch_size, lr=args.learning_rate)
+        elif args.method == "unet":
+            mt = UNET(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
+                             batch_size=args.batch_size, lr=args.learning_rate, database_path=args.database_path)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
 
