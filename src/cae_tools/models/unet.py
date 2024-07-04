@@ -30,12 +30,44 @@ from .decoder_skip import Decoder
 from ..utils.model_database import ModelDatabase
 
 
+#    Copyright (C) 2023  National Centre for Earth Observation (NCEO)
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import torch
+from torch import nn
+from torchvision import transforms
+from torch.utils.data import DataLoader
+import numpy as np
+import xarray as xr
+import json
+import os
+import time
+
+from .base_model import BaseModel
+from .model_sizer import create_model_spec, ModelSpec
+from .ds_dataset import DSDataset
+from .encoder_skip import Encoder
+from .decoder_skip import Decoder
+from ..utils.model_database import ModelDatabase
+
 class UNET(BaseModel):
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, use_gpu=True, conv_kernel_size=3, conv_stride=2,
-                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None):
+                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None,lambda_l1=0.001,lambda_pearson=1):
         """
         Create a convolutional autoencoder general model
 
@@ -77,7 +109,9 @@ class UNET(BaseModel):
         self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
         self.optim = None
         self.db = ModelDatabase(database_path) if database_path else None
-
+        self.lambda_l1 = lambda_l1
+        self.lambda_pearson = lambda_pearson
+        
     def get_parameters(self):
         return {
             "type": "UNET",
@@ -182,21 +216,76 @@ class UNET(BaseModel):
         self.decoder.eval()
         super().load(from_folder)
 
+    def pearson_corr_torch(self,decoded_data, high_res):
+        # flatten
+        decoded_data_flat = decoded_data.view(decoded_data.size(0), decoded_data.size(1), -1)
+        high_res_flat = high_res.view(high_res.size(0), high_res.size(1), -1)
+
+        # compute the mean
+        mean_decoded = torch.mean(decoded_data_flat, dim=2, keepdim=True)
+        mean_high_res = torch.mean(high_res_flat, dim=2, keepdim=True)
+
+        # subtracting the mean
+        decoded_data_centered = decoded_data_flat - mean_decoded
+        high_res_centered = high_res_flat - mean_high_res
+
+        # compute standard deviations
+        std_decoded = torch.std(decoded_data_centered, dim=2, keepdim=True)
+        std_high_res = torch.std(high_res_centered, dim=2, keepdim=True)
+
+        # normalize by dividing by the standard deviation
+        decoded_data_normalized = decoded_data_centered / std_decoded
+        high_res_normalized = high_res_centered / std_high_res
+
+        # Pearson correlation
+        correlation = torch.mean(decoded_data_normalized * high_res_normalized, dim=2)
+
+        return correlation
+    
+    def tv_loss(self, x):
+        """Calculate Total Variation Loss"""
+        batch_size = x.size()[0]
+        h_x = x.size()[2]
+        w_x = x.size()[3]
+        count_h = self._tensor_size(x[:, :, 1:, :])
+        count_w = self._tensor_size(x[:, :, :, 1:])
+        h_tv = torch.pow((x[:, :, 1:, :] - x[:, :, :h_x-1, :]), 2).sum()
+        w_tv = torch.pow((x[:, :, :, 1:] - x[:, :, :, :w_x-1]), 2).sum()
+        return 2 * (h_tv / count_h + w_tv / count_w) / batch_size
+    
+    @staticmethod
+    def _tensor_size(t):
+        return t.size()[1] * t.size()[2] * t.size()[3]
+
     def __train_epoch(self, batches):
         self.encoder.train()
         self.decoder.train()
+        lambda_l1 = self.lambda_l1
+        lambda_pearson = self.lambda_pearson
         train_loss = []
         for (low_res, high_res, labels) in batches:
-            # Encode data
-            encoded_data,skip = self.encoder(low_res)
-            decoded_data = self.decoder(encoded_data,skip)
+            encoded_data, skip = self.encoder(low_res)
+            decoded_data = self.decoder(encoded_data, skip)
+
+            # mse loss
             loss = self.loss_fn(decoded_data, high_res)
+
+            # compute Pearson correlation and Pearson loss
+            pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
+            pearson_loss = 1 - torch.mean(pearson_corr)
+            
+#             # compute tv loss (for regularization)
+#             tv_loss = self.tv_loss(decoded_data)
+
+            # combined loss
+            combined_loss = loss + lambda_pearson*pearson_loss #+ lambda_l1*tv_loss
+
             # Backward pass
             self.optim.zero_grad()
-            loss.backward()
+            combined_loss.backward()
             self.optim.step()
-            # Print batch loss
-            # print('\t partial train loss (single batch): %f' % (loss.data))
+
+            # Append the combined loss to the train loss list
             train_loss.append(loss.detach().cpu().numpy())
 
         mean_loss = np.mean(train_loss)
@@ -219,6 +308,25 @@ class UNET(BaseModel):
                 ctr += self.batch_size
         mean_loss = np.mean(test_loss)
         return float(mean_loss)
+    
+    def __test_epoch_pearson_loss(self, batches, save_arr=None):
+        pearson_losses = []
+        self.encoder.eval()
+        self.decoder.eval()
+        with torch.no_grad():  # No need to track the gradients
+            ctr = 0
+            for (low_res, high_res, labels) in batches:
+                # Encode data
+                encoded_data,skip = self.encoder(low_res)
+                decoded_data = self.decoder(encoded_data,skip)
+                pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
+                pearson_loss = 1 - torch.mean(pearson_corr)
+                pearson_losses.append(pearson_loss.detach().cpu().numpy())
+                if save_arr is not None:
+                    save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
+                ctr += self.batch_size
+        mean_loss = np.mean(pearson_losses)
+        return float(mean_loss)    
 
     def score(self, batches, save_arr):
         self.encoder.eval()
@@ -300,6 +408,7 @@ class UNET(BaseModel):
         start = time.time()
 
         self.loss_fn = torch.nn.MSELoss()
+#         self.loss_fn = PearsonMSELoss()
 
         params_to_optimize = [
             {'params': self.encoder.parameters()},
@@ -328,6 +437,7 @@ class UNET(BaseModel):
             train_loss = self.__train_epoch(train_batches)
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
+                test_pearson_loss = self.__test_epoch_pearson_loss(test_batches)
                 self.history["train_loss"].append(train_loss)
                 self.history["test_loss"].append(test_loss)
                 print("%5d %.6f %.6f" % (epoch, train_loss, test_loss))
@@ -377,3 +487,4 @@ class UNET(BaseModel):
             return s
         else:
             return "Model has not been trained - no layers assigned yet"
+

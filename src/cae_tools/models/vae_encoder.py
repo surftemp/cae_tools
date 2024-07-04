@@ -17,60 +17,64 @@ import torch
 from torch import nn
 import torch.nn.init as init
 
+class Encoder(nn.Module):
 
-class VAE_Encoder(nn.Module):
-
-    def __init__(self, layers, encoded_space_dim, fc_size):
+    def __init__(self, layers, encoded_space_dim, fc_size, num_size_preserving_layers=1):
         super().__init__()
-        
-        # Convolutional layers
+
+        self.num_size_preserving_layers = num_size_preserving_layers
         encoder_layers = []
+
         for layer in layers:
             input_channels = layer.get_input_dimensions()[0]
             output_channels = layer.get_output_dimensions()[0]
+
+            # First Conv2D for downsampling
             encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
                                             stride=layer.get_stride()))
             encoder_layers.append(nn.BatchNorm2d(output_channels))
             encoder_layers.append(nn.ReLU(True))
-        self.encoder_cnn = nn.Sequential(*encoder_layers)
 
-        # Flatten layer
+            # Configurable number of size-preserving Conv2Ds
+            for _ in range(num_size_preserving_layers):
+                encoder_layers.append(nn.Conv2d(output_channels, output_channels, kernel_size=1,
+                                                stride=1))
+                encoder_layers.append(nn.BatchNorm2d(output_channels))
+                encoder_layers.append(nn.ReLU(True))
+
+        self.encoder_cnn = nn.ModuleList(encoder_layers)
         self.flatten = nn.Flatten(start_dim=1)
 
-        # Linear layers
         (chan, y, x) = layers[-1].get_output_dimensions()
-        self.encoder_fc = nn.Linear(chan * y * x, fc_size)
-        # self.fc_relu = nn.ReLU(True)
-        self.fc_relu = nn.LeakyReLU(negative_slope=0.01)        
 
-        # Output layers for mu and logvar
-        self.fc_mu = nn.Linear(fc_size, encoded_space_dim)
-        self.fc_logvar = nn.Linear(fc_size, encoded_space_dim)
-
-        # Initialize weights
-        self._initialize_weights()
-
-    # Weights initialization using Kaiming initialization 
-    def _initialize_weights(self):
-        for module in self.modules():
-            if isinstance(module, nn.Conv2d):
-                init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
-                if module.bias is not None:
-                    init.constant_(module.bias, 0)
-            elif isinstance(module, nn.Linear):
-                init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='leaky_relu')
-                if module.bias is not None:
-                    init.constant_(module.bias, 0)
-            elif isinstance(module, nn.BatchNorm2d):
-                init.constant_(module.weight, 1)
-                init.constant_(module.bias, 0)           
-     
+        self.fc_mu = nn.Linear(chan * y * x, encoded_space_dim)
+        self.fc_logvar = nn.Linear(chan * y * x, encoded_space_dim)
 
     def forward(self, x):
-        x = self.encoder_cnn(x)
+        x_skip = []
+        layer_counter = 0
+
+        for i, layer in enumerate(self.encoder_cnn):
+            x = layer(x)
+            if isinstance(layer, nn.ReLU):
+                if layer_counter == 0:
+                    x_skip.append(x)
+                else:
+                    x = x + x_skip[-1]
+                layer_counter += 1
+
+            if layer_counter == self.num_size_preserving_layers + 1:  # 1 downsampling + n size-preserving layers
+                layer_counter = 0
+                
+#         print(f"Shape before flatten: {x.shape}")  # Debugging line
         x = self.flatten(x)
-        x = self.encoder_fc(x)
-        x = self.fc_relu(x)
+#         print(f"Shape after flatten: {x.shape}")  # Debugging line        
         mu = self.fc_mu(x)
-        log_var = self.fc_logvar(x)
-        return mu, log_var
+        logvar = self.fc_logvar(x)
+        x_skip.pop()  # Remove the last layer's output, not used for skip connections        
+        return mu, logvar, x_skip
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std

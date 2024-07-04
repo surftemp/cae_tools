@@ -93,7 +93,11 @@ class DSDataset(torch.utils.data.Dataset):
 
     def normalise_input(self, arr, input_name):
         if self.normalise_in:
-            return (arr - self.min_inputs[input_name]) / (self.max_inputs[input_name] - self.min_inputs[input_name])
+            range_val = self.max_inputs[input_name] - self.min_inputs[input_name]
+            if range_val == 0:
+                return 0.0
+            else:
+                return (arr - self.min_inputs[input_name]) / range_val
         else:
             return arr
 
