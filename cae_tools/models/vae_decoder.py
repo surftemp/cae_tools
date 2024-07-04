@@ -1,0 +1,107 @@
+#    Copyright (C) 2023  National Centre for Earth Observation (NCEO)
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+import torch
+from torch import nn
+import torch.nn.init as init
+
+class Decoder(nn.Module):
+
+    def __init__(self, layers, encoded_space_dim, fc_size, num_size_preserving_layers=1):
+        super().__init__()
+
+        (chan, y, x) = layers[0].get_input_dimensions()
+        # Unpacking and setting as instance attributes
+        (self.chan, self.y, self.x) = layers[0].get_input_dimensions()
+
+        self.decoder_lin = nn.Sequential(
+            nn.Linear(encoded_space_dim, fc_size),
+            nn.ReLU(True),
+            nn.Linear(fc_size, chan * y * x),
+        )
+
+        self.unflatten = nn.Unflatten(dim=1, unflattened_size=(chan, y, x))
+
+        decoder_layers = []
+        for i, layer in enumerate(layers):
+            input_channels = layer.get_input_dimensions()[0]
+            output_channels = layer.get_output_dimensions()[0]
+            # Transpose Conv2D for upsampling
+            decoder_layers.append(
+                nn.ConvTranspose2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
+                                   stride=layer.get_stride(), output_padding=layer.get_output_padding()))
+
+            if layer != layers[-1]:
+                decoder_layers.append(nn.BatchNorm2d(output_channels * 2))
+                decoder_layers.append(nn.ReLU(True))
+
+            # Configurable number of size-preserving Conv2Ds
+            for _ in range(num_size_preserving_layers):
+                if layer != layers[-1]:
+                    decoder_layers.append(
+                        nn.Conv2d(output_channels * 2, output_channels * 2, kernel_size=1, stride=1))
+                    decoder_layers.append(nn.BatchNorm2d(output_channels * 2))
+                    decoder_layers.append(nn.ReLU(True))
+                else:
+                    decoder_layers.append(
+                        nn.Conv2d(output_channels, output_channels, kernel_size=1, stride=1))
+                    decoder_layers.append(nn.BatchNorm2d(output_channels))
+
+        self.decoder_conv = nn.ModuleList(decoder_layers)
+
+        self._initialize_weights()        
+
+    def _initialize_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.ConvTranspose2d):
+                init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.Linear):
+                # For the last Linear layer use Xavier if it is followed by a Sigmoid
+                if module.out_features == self.chan * self.y * self.x: 
+                    init.xavier_normal_(module.weight)
+                else:
+                    init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    init.constant_(module.bias, 0)
+            elif isinstance(module, nn.BatchNorm2d):
+                init.constant_(module.weight, 1)
+                init.constant_(module.bias, 0)
+
+    def forward(self, x, x_skip):
+#         print(f"Latent vector shape: {x.shape}")  # Debugging line
+        x = self.decoder_lin(x)
+#         print(f"Shape after decoder_lin: {x.shape}")  # Debugging line
+        x = self.unflatten(x)
+#         print(f"Shape after unflatten: {x.shape}")  # Debugging line
+
+        x_skip = x_skip[::-1]  # reverse to match decoder order
+
+        skip_idx = 0        
+        for i, layer in enumerate(self.decoder_conv):
+            if isinstance(layer, nn.Conv2d):
+                x = layer(x) + x
+            else:    
+                x = layer(x)
+#             print(f"Shape after layer {i}: {x.shape}")  # Debugging line
+            # concatenate skip connections after transposed convolution
+            if isinstance(layer, nn.ConvTranspose2d) and skip_idx < len(x_skip):
+#                 print(f"Shape of skip connection {skip_idx}: {x_skip[skip_idx].shape}")  # Debugging line
+                x = torch.cat((x, x_skip[skip_idx]), 1)
+                skip_idx += 1
+#                 print(f"Shape after concatenation: {x.shape}")  # Debugging line
+        x = torch.sigmoid(x)
+        return x

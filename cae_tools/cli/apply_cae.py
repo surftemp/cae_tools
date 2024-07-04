@@ -19,9 +19,11 @@ import json
 import xarray as xr
 
 from cae_tools.models.conv_ae_model import ConvAEModel
-from cae_tools.models.var_ae_model import VarAEModel
+from cae_tools.models.var_ae_model import VAEUNET
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.unet import UNET
+from cae_tools.models.resunet import RESUNET
+from cae_tools.models.resunet_gan import RESUNET_GAN
 
 
 def main():
@@ -46,8 +48,12 @@ def main():
         mt = ConvAEModel()
     elif parameters["type"] == "UNET":
         mt = UNET()
-    elif parameters["type"] == "VarAEModel":
-        mt = VarAEModel()
+    elif parameters["type"] == "RESUNET":
+        mt = RESUNET()       
+    elif parameters["type"] == "RESUNET_GAN":
+        mt = RESUNET_GAN()            
+    elif parameters["type"] == "VAEUNET":
+        mt = VAEUNET()
     elif parameters["type"] == "LinearModel":
         mt = LinearModel()
 

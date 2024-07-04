@@ -82,7 +82,7 @@ class BaseModel:
             input = input.to(device)
             score_arr = np.zeros(output_not_norm.shape)
             self.score([input], save_arr=score_arr)
-            output_not_norm = output_not_norm.numpy(force=True)
+            output_not_norm = output_not_norm.numpy()
             score_arr = dataset.denormalise_output(score_arr,force=True)
             # feed the instances in each batch into the model metric accumulator
             batch_size = output_not_norm.shape[0]
