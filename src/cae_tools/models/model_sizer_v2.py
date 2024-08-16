@@ -26,8 +26,8 @@ class LayerSpec:
     def __repr__(self):
         s = "\tInput Convolutional Layer:\n" if self.is_input else "\tOutput Convolutional Layer:\n"
         s += f"\t\tkernel_size={self.kernel_size}  stride={self.stride}\n"
-        if self.output_padding:
-            s += f"\t\toutput_padding=({self.output_padding})\n"
+        if self.output_padding_x or self.output_padding_y:
+            s += f"\t\toutput_padding=({self.output_padding_y},{self.output_padding_x})\n"
         s += f"\t\t{self.input_dimensions} => {self.output_dimensions}\n"
         return s
 

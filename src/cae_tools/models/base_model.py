@@ -68,6 +68,12 @@ class BaseModel:
             self.encoder.to(device)
         if hasattr(self,"decoder"):
             self.decoder.to(device)
+        if hasattr(self,"vae"):
+            self.vae.to(device)
+        if hasattr(self,"unet_res"):
+            self.unet_res.to(device)     
+        if hasattr(self,"srcnn_res"):
+            self.srcnn_res.to(device)             
 
         dataset.set_normalise_output(False) # need to avoid normalising outputs when accessing the dataset
 
@@ -123,9 +129,17 @@ class BaseModel:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         else:
             device = torch.device("cpu")
-
-        self.encoder.to(device)
-        self.decoder.to(device)
+            
+        if hasattr(self,"encoder"):
+            self.encoder.to(device)
+        if hasattr(self,"decoder"):
+            self.decoder.to(device)
+        if hasattr(self,"vae"):
+            self.vae.to(device)
+        if hasattr(self,"unet_res"):
+            self.unet_res.to(device)   
+        if hasattr(self,"srcnn_res"):
+            self.srcnn_res.to(device)              
 
         score_batches = []
         for low_res, _, _ in val_loader:

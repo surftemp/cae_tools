@@ -28,17 +28,16 @@ import pytorch_msssim
 from .base_model import BaseModel
 from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
-from .vae_encoder import Encoder
-from .vae_decoder import Decoder
+from .srcnn_res_class import SRCNN_RES
 from ..utils.model_database import ModelDatabase
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau, ExponentialLR, CosineAnnealingLR
 
 
-class VAEUNET(BaseModel):
+class SRCNN_RES_Train(BaseModel):
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
-                 lr=0.001,lr_step_size=500,lr_gamma=0.5,scheduler_type=None, weight_decay=1e-5, use_gpu=True, conv_kernel_size=3, conv_stride=2,
+                 lr=0.001,lr_step_size=500,lr_gamma=0.5,scheduler_type=None, weight_decay=1e-5, use_gpu=True, conv_kernel_size=3, conv_stride=2, num_res_layers=1,
                  conv_input_layer_count=None, conv_output_layer_count=None, database_path=None,
                  lambda_mse=1,lambda_l1=0.01,lambda_pearson=1,lambda_ssim=1,lambda_additional=0.1, lambda_kl=1,additional_loss_type=None):
         """
@@ -68,7 +67,7 @@ class VAEUNET(BaseModel):
         self.normalise_output = normalise_output
         self.normalisation_parameters = None
         self.input_shape = self.output_shape = None
-        self.encoder = self.decoder = None
+        self.srcnn_res = None
         self.batch_size = batch_size
         self.nr_epochs = nr_epochs
         self.test_interval = test_interval
@@ -95,6 +94,7 @@ class VAEUNET(BaseModel):
         self.lr_step_size=lr_step_size
         self.lr_gamma=lr_gamma
         self.scheduler_type=scheduler_type
+        self.num_res_layers = num_res_layers
         
         # initialize perceptual loss model if needed
         if self.additional_loss_type == 'perceptual':
@@ -104,7 +104,7 @@ class VAEUNET(BaseModel):
                 param.requires_grad = False
 
         if inspect.stack()[1].filename.endswith("train_cae.py"):
-            print(f"VAEUNET initialized with parameters:\n"
+            print(f"SRCNN_RES initialized with parameters:\n"
                   f"normalise_input: {self.normalise_input}\n"
                   f"normalise_output: {self.normalise_output}\n"
                   f"batch_size: {self.batch_size}\n"
@@ -127,7 +127,7 @@ class VAEUNET(BaseModel):
 
     def get_parameters(self):
         return {
-            "type": "VAEUNET",
+            "type": "SRCNN_RES",
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "batch_size": self.batch_size,
@@ -167,10 +167,8 @@ class VAEUNET(BaseModel):
         :param to_folder: folder to which model files are to be saved
         """
         os.makedirs(to_folder, exist_ok=True)
-        encoder_path = os.path.join(to_folder, "encoder.weights")
-        torch.save(self.encoder.state_dict(), encoder_path)
-        decoder_path = os.path.join(to_folder, "decoder.weights")
-        torch.save(self.decoder.state_dict(), decoder_path)
+        srcnn_res_path = os.path.join(to_folder, "srcnn_res.weights")
+        torch.save(self.srcnn_res.state_dict(), srcnn_res_path)
         normalisation_path = os.path.join(to_folder, "normalisation.weights")
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
@@ -233,15 +231,11 @@ class VAEUNET(BaseModel):
             self.spec = ModelSpec()
             self.spec.load(json.loads(f.read()))
 
-        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, num_size_preserving_layers=1)
-        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, num_size_preserving_layers=1)
+        self.srcnn_res = SRCNN_RES(self.input_shape[0],num_res_layers=self.num_res_layers)
 
-        encoder_path = os.path.join(from_folder, "encoder.weights")
-        self.encoder.load_state_dict(torch.load(encoder_path))
-        self.encoder.eval()
-        decoder_path = os.path.join(from_folder, "decoder.weights")
-        self.decoder.load_state_dict(torch.load(decoder_path))
-        self.decoder.eval()
+        srcnn_res_path = os.path.join(from_folder, "srcnn_res.weights")
+        self.srcnn_res.load_state_dict(torch.load(srcnn_res_path))
+        self.srcnn_res.eval()
         super().load(from_folder)        
         
     def contrastive_loss(self, y_true, y_pred):
@@ -263,27 +257,27 @@ class VAEUNET(BaseModel):
 
         return loss    
 
-    def histogram_loss(self, y_true, y_pred,bins=256, min_val=0, max_val=1, sigma=0.01):
-        y_true = y_true.view(-1)
-        y_pred = y_pred.view(-1)
-        delta = (self.max_val - self.min_val) / self.bins
+#     def histogram_loss(self, y_true, y_pred,bins=256, min_val=0, max_val=1, sigma=0.01):
+#         y_true = y_true.view(-1)
+#         y_pred = y_pred.view(-1)
+#         delta = (self.max_val - self.min_val) / self.bins
 
-        # Create bin centers
-        bin_centers = torch.linspace(self.min_val + delta / 2, self.max_val - delta / 2, self.bins).to(y_true.device)
-        
-        y_true = y_true.unsqueeze(1)
-        y_pred = y_pred.unsqueeze(1)
+#         # Create bin centers
+#         bin_centers = torch.linspace(self.min_val + delta / 2, self.max_val - delta / 2, self.bins).to(y_true.device)
 
-        # Compute the differentiable histograms
-        hist_true = torch.exp(-0.5 * ((y_true - bin_centers) / self.sigma) ** 2).sum(dim=0)
-        hist_pred = torch.exp(-0.5 * ((y_pred - bin_centers) / self.sigma) ** 2).sum(dim=0)
+#         y_true = y_true.unsqueeze(1)
+#         y_pred = y_pred.unsqueeze(1)
 
-        hist_true = hist_true / hist_true.sum()
-        hist_pred = hist_pred / hist_pred.sum()
+#         # Compute the differentiable histograms
+#         hist_true = torch.exp(-0.5 * ((y_true - bin_centers) / self.sigma) ** 2).sum(dim=0)
+#         hist_pred = torch.exp(-0.5 * ((y_pred - bin_centers) / self.sigma) ** 2).sum(dim=0)
 
-        # Compute the histogram loss
-        hist_loss = torch.sum(torch.abs(hist_true - hist_pred))
-        return hist_loss
+#         hist_true = hist_true / hist_true.sum()
+#         hist_pred = hist_pred / hist_pred.sum()
+
+#         # Compute the histogram loss
+#         hist_loss = torch.sum(torch.abs(hist_true - hist_pred))
+#         return hist_loss
 
     def perceptual_loss(self, y_true, y_pred):
         # Ensure 3 channels by replicating grayscale channels
@@ -316,29 +310,29 @@ class VAEUNET(BaseModel):
         else:
             raise ValueError(f"Unknown additional loss type: {self.additional_loss_type}")
 
-    def pearson_corr_torch(self, decoded_data, high_res):
+    def pearson_corr_torch(self, prediction, high_res):
         # flatten
-        decoded_data_flat = decoded_data.view(decoded_data.size(0), decoded_data.size(1), -1)
+        prediction_flat = prediction.view(prediction.size(0), prediction.size(1), -1)
         high_res_flat = high_res.view(high_res.size(0), high_res.size(1), -1)
 
         # compute the mean
-        mean_decoded = torch.mean(decoded_data_flat, dim=2, keepdim=True)
+        mean_prediction = torch.mean(prediction_flat, dim=2, keepdim=True)
         mean_high_res = torch.mean(high_res_flat, dim=2, keepdim=True)
 
         # subtracting the mean
-        decoded_data_centered = decoded_data_flat - mean_decoded
+        prediction_centered = prediction_flat - mean_prediction
         high_res_centered = high_res_flat - mean_high_res
 
         # compute standard deviations
-        std_decoded = torch.std(decoded_data_centered, dim=2, keepdim=True)
+        std_prediction = torch.std(prediction_centered, dim=2, keepdim=True)
         std_high_res = torch.std(high_res_centered, dim=2, keepdim=True)
 
         # normalize by dividing by the standard deviation
-        decoded_data_normalized = decoded_data_centered / std_decoded
+        prediction_normalized = prediction_centered / std_prediction
         high_res_normalized = high_res_centered / std_high_res
 
         # Pearson correlation
-        correlation = torch.mean(decoded_data_normalized * high_res_normalized, dim=2)
+        correlation = torch.mean(prediction_normalized * high_res_normalized, dim=2)
 
         return correlation
 
@@ -357,18 +351,17 @@ class VAEUNET(BaseModel):
     def _tensor_size(t):
         return t.size()[1] * t.size()[2] * t.size()[3]
     
-    def custom_ms_ssim_loss(self, decoded_data, high_res, levels=2):       # can not use until sorting out size limit of 160*160 min
+    def custom_ms_ssim_loss(self, prediction, high_res, levels=2):       # can not use until sorting out size limit of 160*160 min
         weights = [0.5] * levels  # Adjust weights according to the number of levels
-        ms_ssim_value = pytorch_msssim.ms_ssim(decoded_data, high_res, data_range=1.0, size_average=True, win_size=11, weights=weights)
+        ms_ssim_value = pytorch_msssim.ms_ssim(prediction, high_res, data_range=1.0, size_average=True, win_size=11, weights=weights)
         return 1 - ms_ssim_value
     
-    def ssim_loss(self, decoded_data, high_res):
-        ssim_value = pytorch_msssim.ssim(decoded_data, high_res, data_range=1.0, size_average=True)
+    def ssim_loss(self, prediction, high_res):
+        ssim_value = pytorch_msssim.ssim(prediction, high_res, data_range=1.0, size_average=True)
         return 1 - ssim_value    
 
     def __train_epoch(self, batches):
-        self.encoder.train()
-        self.decoder.train()
+        self.srcnn_res.train()
         lambda_mse=self.lambda_mse
         lambda_l1 = self.lambda_l1
         lambda_pearson = self.lambda_pearson
@@ -385,36 +378,27 @@ class VAEUNET(BaseModel):
         additional_losses = []
 
         for (low_res, high_res, labels) in batches:
-            mu, logvar, skip = self.encoder(low_res)
-            z = self.encoder.reparameterize(mu, logvar)
-            decoded_data = self.decoder(z, skip)
+            prediction = self.srcnn_res(low_res)
 
             # mse loss
-            recon_loss = self.loss_fn(decoded_data, high_res)
+            recon_loss = self.loss_fn(prediction, high_res)
             mse_losses.append(recon_loss.detach())  # Keep on GPU
 
             # compute Pearson correlation and Pearson loss
-            pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
+            pearson_corr = self.pearson_corr_torch(prediction, high_res)
             pearson_loss = 1 - torch.mean(pearson_corr)
             pearson_losses.append(pearson_loss.detach())  # Keep on GPU
-            
-            ssim_loss_value = self.ssim_loss(decoded_data, high_res)
-            ssim_losses.append(ssim_loss_value.detach())
-            l1_loss = nn.functional.l1_loss(decoded_data, high_res)
 
-#             # compute tv loss (for regularization)
-#             tv_loss = self.tv_loss(decoded_data)
-            l1_losses.append(l1_loss.detach())  # Keep on GPU
+#             ssim_loss_value = self.ssim_loss(prediction, high_res)
+#             ssim_losses.append(ssim_loss_value.detach())
+#             l1_loss = nn.functional.l1_loss(prediction, high_res)
 
-            # compute additional loss
-            additional_loss = self.get_additional_loss(high_res, decoded_data)
-            additional_losses.append(additional_loss.detach())  # Keep on GPU
 
-            # KL divergence
-            KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+#             # KL divergence
+#             KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
 
             # combined loss
-            combined_loss = lambda_mse*recon_loss + lambda_kl*KLD + lambda_pearson * pearson_loss + lambda_pearson*ssim_loss_value + lambda_additional*additional_loss + lambda_l1*l1_loss 
+            combined_loss = lambda_mse*recon_loss + lambda_pearson * pearson_loss
             # Backward pass
             self.optim.zero_grad()
             combined_loss.backward()
@@ -427,11 +411,8 @@ class VAEUNET(BaseModel):
         mean_loss = torch.mean(torch.stack(train_loss)).cpu().numpy()
         mean_mse_loss = torch.mean(torch.stack(mse_losses)).cpu().numpy()
         mean_pearson_loss = torch.mean(torch.stack(pearson_losses)).cpu().numpy()
-        mean_ssim_loss = torch.mean(torch.stack(ssim_losses)).cpu().numpy()
-        mean_l1_loss = torch.mean(torch.stack(l1_losses)).cpu().numpy()
-        mean_additional_loss = torch.mean(torch.stack(additional_losses)).cpu().numpy()
 
-        return float(mean_loss), float(mean_mse_loss), float(mean_pearson_loss),float(mean_ssim_loss), float(mean_l1_loss), float(mean_additional_loss)
+        return float(mean_loss), float(mean_mse_loss), float(mean_pearson_loss)
 
 
 
@@ -443,74 +424,47 @@ class VAEUNET(BaseModel):
         l1_losses = []
         additional_losses = []
 
-        self.encoder.eval()
-        self.decoder.eval()
+        self.srcnn_res.eval()
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for (low_res, high_res, labels) in batches:
-                # Encode data
-                mu, logvar, skip = self.encoder(low_res)
-                z = self.encoder.reparameterize(mu, logvar)
-                decoded_data = self.decoder(z, skip)
+                # forward map
+                prediction = self.srcnn_res(low_res)
 
                 # mse loss
-                recon_loss = self.loss_fn(decoded_data, high_res)
+                recon_loss = self.loss_fn(prediction, high_res)
                 mse_losses.append(recon_loss.detach())
 
-                # compute Pearson correlation and Pearson loss
-                pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
+                #  Pearson loss
+                pearson_corr = self.pearson_corr_torch(prediction, high_res)
                 pearson_loss = 1 - torch.mean(pearson_corr)
                 pearson_losses.append(pearson_loss.detach())
-
-                ssim_loss_value = self.ssim_loss(decoded_data, high_res)
-                ssim_losses.append(ssim_loss_value.detach())                
-                
-#                 # compute tv loss (for regularization)
-#                 tv_loss = self.tv_loss(decoded_data)
-#                 l1_losses.append(tv_loss.detach())
-
-                # compute additional loss
-                additional_loss = self.get_additional_loss(high_res, decoded_data)
-                additional_losses.append(additional_loss.detach())
-
-                # KL divergence
-                KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+             
 
                 # combined loss
-                combined_loss = self.lambda_mse*recon_loss + self.lambda_kl*KLD + self.lambda_pearson * pearson_loss + self.lambda_additional*additional_loss #self.lambda_l1 * tv_loss + 
+                combined_loss = self.lambda_mse*recon_loss + self.lambda_pearson * pearson_loss 
                 test_loss.append(combined_loss.detach())
 
                 if save_arr is not None:
-                    save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
+                    save_arr[ctr:ctr + self.batch_size, :, :, :] = prediction.cpu()
                 ctr += self.batch_size
 
         mean_loss = torch.mean(torch.stack(test_loss)).cpu().numpy()
         mean_mse_loss = torch.mean(torch.stack(mse_losses)).cpu().numpy()
         mean_pearson_loss = torch.mean(torch.stack(pearson_losses)).cpu().numpy()
-        mean_ssim_loss = torch.mean(torch.stack(ssim_losses)).cpu().numpy()
-        mean_l1_loss = 0
-        mean_additional_loss = torch.mean(torch.stack(additional_losses)).cpu().numpy()
 
-        return float(mean_loss), float(mean_mse_loss), float(mean_pearson_loss), float(mean_ssim_loss), float(mean_l1_loss), float(mean_additional_loss)
+        return float(mean_loss), float(mean_mse_loss), float(mean_pearson_loss)
 
 
     def score(self, batches, save_arr):
-        self.encoder.eval()
-        self.decoder.eval()
+        self.srcnn_res.eval()
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for input_data in batches:
-                mu, logvar, skip = self.encoder(input_data)
-                z = self.encoder.reparameterize(mu, logvar)
-                decoded_data = self.decoder(z, skip)
-                # Convert to CPU and then to NumPy for inspection
-                encoded_data_np = z.cpu().numpy()
-                decoded_data_np = decoded_data.cpu().numpy()
-
-                # Debugging: Print or inspect these variables
-                # print("encoded_data_np:", encoded_data_np)
-                # print("decoded_data:", decoded_data_np)                   
-                save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
+                prediction = self.srcnn_res(input_data)
+                prediction_np = prediction.cpu().numpy()
+                  
+                save_arr[ctr:ctr + self.batch_size, :, :, :] = prediction.cpu()
                 ctr += self.batch_size
 
     def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", testing_paths=""):
@@ -546,10 +500,8 @@ class VAEUNET(BaseModel):
                                  kernel_size=self.conv_kernel_size, stride=self.conv_stride,
                                  input_layer_count=self.conv_input_layer_count, output_layer_count=self.conv_output_layer_count)
 
-        if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
+        if not self.srcnn_res:
+            self.srcnn_res = SRCNN_RES(num_channels=input_chan, num_res_layers=self.num_res_layers)
 
         train_transform = transforms.Compose([
             transforms.ToTensor(),
@@ -577,16 +529,13 @@ class VAEUNET(BaseModel):
         self.loss_fn = torch.nn.MSELoss()
 
         params_to_optimize = [
-            {'params': self.encoder.parameters()},
-            {'params': self.decoder.parameters()}
+            {'params': self.srcnn_res.parameters()}
         ]
 
         self.optim = torch.optim.Adam(params_to_optimize, lr=self.lr, weight_decay=self.weight_decay)
         scheduler = self._initialize_scheduler()
 
-        self.encoder.to(device)
-        self.decoder.to(device)
-        
+        self.srcnn_res.to(device)        
         
 
         train_batches = []
@@ -605,7 +554,7 @@ class VAEUNET(BaseModel):
         
         try:
             for epoch in range(self.nr_epochs):
-                train_loss, train_mse_loss, train_pearson_loss, train_ssim_loss, train_l1_loss, train_additional_loss = self.__train_epoch(train_batches)
+                train_loss, train_mse_loss, train_pearson_loss = self.__train_epoch(train_batches)
                 
                 if scheduler:
                     if isinstance(scheduler, ReduceLROnPlateau):
@@ -619,11 +568,11 @@ class VAEUNET(BaseModel):
                     
                 if epoch % self.test_interval == 0:
                     current_lr = self.optim.param_groups[0]['lr']
-                    test_loss, test_mse_loss, test_pearson_loss, test_ssim_loss, test_l1_loss, test_additional_loss = self.__test_epoch(test_batches)
+                    test_loss, test_mse_loss, test_pearson_loss = self.__test_epoch(test_batches)
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
-                    print(f"{epoch:5d} Train Loss: {train_loss:.6f} (MSE: {train_mse_loss:.6f}, Pearson: {train_pearson_loss:.6f}, SSIM: {train_ssim_loss:.6f} l1: {train_l1_loss:.6f}, Additional: {train_additional_loss:.6f}, Current Lr: {current_lr}) "
-                          f"Test Loss: {test_loss:.6f} (MSE: {test_mse_loss:.6f}, Pearson: {test_pearson_loss:.6f}, SSIM: {test_ssim_loss:.6f} l1: {test_l1_loss:.6f}, Additional: {test_additional_loss:.6f}) ")
+                    print(f"{epoch:5d} Train Loss: {train_loss:.6f} (MSE: {train_mse_loss:.6f}, Pearson: {train_pearson_loss:.6f}, Current Lr: {current_lr}) "
+                          f"Test Loss: {test_loss:.6f} (MSE: {test_mse_loss:.6f}, Pearson: {test_pearson_loss:.6f} ")
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
         finally:
@@ -635,7 +584,7 @@ class VAEUNET(BaseModel):
             print("elapsed:" + str(elapsed))
 
             if self.db:
-                self.db.add_training_result(self.get_model_id(), "VAEUNET", output_variable, input_variables, self.summary(),
+                self.db.add_training_result(self.get_model_id(), "SRCNN_RES", output_variable, input_variables, self.summary(),
                                             model_path, training_paths, train_loss, testing_paths, test_loss, self.get_parameters(), self.spec.save())
             if model_path:
                 self.save(model_path)
@@ -657,7 +606,7 @@ class VAEUNET(BaseModel):
 
     def summary(self):
         """
-        Print a summary of the encoder/input and decoder/output layers
+        Print a summary of the srcnn_res layers
         """
         if self.spec:
             s = "Model Summary:\n"

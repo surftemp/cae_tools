@@ -28,17 +28,20 @@ class Encoder(nn.Module):
         for layer in layers:
             input_channels = layer.get_input_dimensions()[0]
             output_channels = layer.get_output_dimensions()[0]
-
+            kernel_size = layer.get_kernel_size()
+            stride = layer.get_stride()
+            padding = layer.get_output_padding()
+            
             # First Conv2D for downsampling
-            encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                            stride=layer.get_stride()))
+            encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=kernel_size,
+                                            stride=stride,padding=padding))
             encoder_layers.append(nn.BatchNorm2d(output_channels))
             encoder_layers.append(nn.ReLU(True))
 
             # Configurable number of size-preserving Conv2Ds
             for _ in range(num_size_preserving_layers):
-                encoder_layers.append(nn.Conv2d(output_channels, output_channels, kernel_size=1,
-                                                stride=1))
+                encoder_layers.append(nn.Conv2d(output_channels, output_channels, kernel_size=3,
+                                                stride=1,padding='same'))
                 encoder_layers.append(nn.BatchNorm2d(output_channels))
                 encoder_layers.append(nn.ReLU(True))
 
@@ -55,7 +58,10 @@ class Encoder(nn.Module):
         layer_counter = 0
 
         for i, layer in enumerate(self.encoder_cnn):
+#             print(f"Layer {i}: {layer.__class__.__name__}")
+#             print(f"Input shape: {x.shape}")
             x = layer(x)
+#             print(f"Output shape: {x.shape}")
             if isinstance(layer, nn.ReLU):
                 if layer_counter == 0:
                     x_skip.append(x)

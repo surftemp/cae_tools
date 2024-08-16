@@ -1,12 +1,22 @@
+#    Copyright (C) 2023  National Centre for Earth Observation (NCEO)
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import torch
 from torch import nn
 from torchvision import transforms
 from torch.utils.data import DataLoader
-import torch.optim as optim
-from torchvision import models
-import torch.nn.functional as F
-
-
 import numpy as np
 import xarray as xr
 import json
@@ -16,8 +26,32 @@ import time
 from .base_model import BaseModel
 from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
+# from .encoder_skip import Encoder
+# from .decoder_skip import Decoder
 from ..utils.model_database import ModelDatabase
 
+
+class Discriminator(nn.Module):
+    def __init__(self, input_channels):
+        super(Discriminator, self).__init__()
+        self.main = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(512, 1, kernel_size=4, stride=1, padding=0),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        return self.main(x).view(-1, 1).squeeze(1)
 
 class ChannelAttention(nn.Module):
     def __init__(self, in_planes, ratio=8):
@@ -38,7 +72,8 @@ class ChannelAttention(nn.Module):
         return self.sigmoid(out)
 
 class Encoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.3):
+
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.5):
         super().__init__()
 
         encoder_layers = []
@@ -46,12 +81,13 @@ class Encoder(nn.Module):
             input_channels = layer.get_input_dimensions()[0]
             output_channels = layer.get_output_dimensions()[0]
             encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                            stride=layer.get_stride(), padding=layer.get_output_padding()))
+                                            stride=layer.get_stride(),padding=layer.get_output_padding()))
             encoder_layers.append(nn.BatchNorm2d(output_channels))
             encoder_layers.append(nn.ReLU(True))
             encoder_layers.append(nn.Dropout(dropout_rate))  # Add dropout after ReLU
 
         self.encoder_cnn = nn.ModuleList(encoder_layers)
+
         self.flatten = nn.Flatten(start_dim=1)
 
         (chan, y, x) = layers[-1].get_output_dimensions()
@@ -67,6 +103,7 @@ class Encoder(nn.Module):
         )
 
     def forward(self, x):
+        #x = self.encoder_cnn(x)
         x_skip = []
         for layer in self.encoder_cnn:
             x = layer(x)
@@ -76,14 +113,17 @@ class Encoder(nn.Module):
         x = self.flatten(x)
         x = self.encoder_lin(x)
         x_skip.pop()  # remove the last layer's output, not used for skip connections
-        return x, x_skip
+        return x,x_skip
+
 
 class Decoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.3):
+
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.5):
         super().__init__()
 
         (chan, y, x) = layers[0].get_input_dimensions()
-        self.chan, self.y, self.x = layers[0].get_input_dimensions()
+        # Unpacking and setting as instance attributes
+        (self.chan, self.y, self.x) = layers[0].get_input_dimensions()
 
         self.decoder_lin = nn.Sequential(
             nn.Linear(encoded_space_dim, fc_size),
@@ -98,77 +138,47 @@ class Decoder(nn.Module):
         self.unflatten = nn.Unflatten(dim=1, unflattened_size=(chan, y, x))
 
         decoder_layers = []
-        self.attention_layers = nn.ModuleList()
+        self.attention_layers = nn.ModuleList()        
         for layer in layers:
             input_channels = layer.get_input_dimensions()[0]
             output_channels = layer.get_output_dimensions()[0]
             decoder_layers.append(
                 nn.ConvTranspose2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                   stride=layer.get_stride(), padding=layer.get_output_padding()))
+                                   stride=layer.get_stride(), output_padding=layer.get_output_padding()))
             if layer != layers[-1]:
                 self.attention_layers.append(ChannelAttention(output_channels))                
-                decoder_layers.append(nn.BatchNorm2d(output_channels * 2))
+                decoder_layers.append(nn.BatchNorm2d(output_channels*2))
                 decoder_layers.append(nn.ReLU(True))
                 decoder_layers.append(nn.Dropout(dropout_rate))  # Add dropout after ReLU
 
         self.decoder_conv = nn.ModuleList(decoder_layers)
+    
 
     def forward(self, x, x_skip):
         x = self.decoder_lin(x)
         x = self.unflatten(x)
+        #x = self.decoder_conv(x)
         x_skip = x_skip[::-1]  # reverse to match decoder order
 
         skip_idx = 0        
         for layer in self.decoder_conv:
             x = layer(x)
+            # version 1, concatenate skip connections after transposed convolution:
             if isinstance(layer, nn.ConvTranspose2d) and skip_idx < len(x_skip):
                 attention = self.attention_layers[skip_idx](x)
                 x = x * attention  # Apply attention                
                 x = torch.cat((x, x_skip[skip_idx]), 1)
                 skip_idx += 1            
         x = torch.sigmoid(x)
-        return x 
+        return x    
 
-class VGGPerceptualLoss(nn.Module):
-    def __init__(self, layers=[0,5, 10, 19, 28], device='cuda'):
-        super(VGGPerceptualLoss, self).__init__()
-        vgg = models.vgg19(pretrained=True).features
-        self.layers = layers  # Select layers to use for perceptual loss
-        self.perceptual_encoder = nn.Sequential(*list(vgg)[:9]).to(device).eval()  # 
-        for param in self.perceptual_encoder.parameters():
-            param.requires_grad = False
-
-        self.resize_transform = transforms.Resize((224, 224))
-        self.normalize_transform = transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                                                        std=[0.229, 0.224, 0.225])
-        self.device = device
-
-    def forward(self, predicted, ground_truth):
-        predicted_3channel = predicted.repeat(1, 3, 1, 1)
-        ground_truth_3channel = ground_truth.repeat(1, 3, 1, 1)
-        
-        predicted_resized = self.resize_transform(predicted_3channel)
-        ground_truth_resized = self.resize_transform(ground_truth_3channel)
-
-        predicted_normalized = self.normalize_transform(predicted_resized)
-        ground_truth_normalized = self.normalize_transform(ground_truth_resized)
-        
-        predicted_normalized = predicted_normalized.to(self.device)
-        ground_truth_normalized = ground_truth_normalized.to(self.device)
-        
-        predicted_features = self.perceptual_encoder(predicted_normalized)
-        ground_truth_features = self.perceptual_encoder(ground_truth_normalized)
-        
-        #  perceptual loss (MSE between VGG features)
-        loss = nn.MSELoss()(predicted_features, ground_truth_features)
-
-        return loss    
 
 class UNET(BaseModel):
+
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, use_gpu=True, conv_kernel_size=3, conv_stride=2,
-                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1):
+                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None,lambda_l1=0.001,lambda_pearson=1):
         """
         Create a convolutional autoencoder general model
 
@@ -194,7 +204,6 @@ class UNET(BaseModel):
         self.normalisation_parameters = None
         self.input_shape = self.output_shape = None
         self.encoder = self.decoder = None
-        self.discriminator = None
         self.batch_size = batch_size
         self.nr_epochs = nr_epochs
         self.test_interval = test_interval
@@ -208,16 +217,12 @@ class UNET(BaseModel):
         self.conv_input_layer_count = conv_input_layer_count
         self.conv_output_layer_count = conv_output_layer_count
         self.spec = None
-        self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs': 0}
+        self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
         self.optim = None
-        self.optim_D = None
         self.db = ModelDatabase(database_path) if database_path else None
         self.lambda_l1 = lambda_l1
         self.lambda_pearson = lambda_pearson
-        self.adversarial_loss = nn.BCELoss()
-        self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
-        self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
-
+        
     def get_parameters(self):
         return {
             "type": "UNET",
@@ -238,91 +243,59 @@ class UNET(BaseModel):
             "model_id": self.get_model_id()
         }
 
-    def compute_gradient_penalty(self, D, real_samples, fake_samples):
-        """Calculates the gradient penalty loss for WGAN GP"""
-        alpha = torch.tensor(np.random.random((real_samples.size(0), 1, 1, 1)), dtype=torch.float32, requires_grad=True).to(real_samples.device)
-        interpolates = (alpha * real_samples + (1 - alpha) * fake_samples).requires_grad_(True)
-        d_interpolates = D(interpolates)
-        fake = torch.ones(d_interpolates.size(), requires_grad=False).to(real_samples.device)
-        gradients = torch.autograd.grad(
-            outputs=d_interpolates,
-            inputs=interpolates,
-            grad_outputs=fake,
-            create_graph=True,
-            retain_graph=True,
-            only_inputs=True
-        )[0]
-        gradients = gradients.view(gradients.size(0), -1)
-        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
-        return gradient_penalty
-    
-    def __train_epoch(self, batches, n_critic=5):
+    def __train_epoch(self, batches):
         self.encoder.train()
         self.decoder.train()
-#         self.discriminator.train()
         lambda_l1 = self.lambda_l1
         lambda_pearson = self.lambda_pearson
-        flag_pearson = False
         train_loss = []
         train_pearson_loss=[]
-        train_bias_loss = []
-        train_d_loss = []
-
-        for i, (low_res, high_res, labels) in enumerate(batches):
-#             valid = torch.ones((high_res.size(0), 1 ), requires_grad=False).to(low_res.device)
-#             fake = torch.zeros((high_res.size(0), 1 ), requires_grad=False).to(low_res.device)
-
-            self.optim.zero_grad()
+        for (low_res, high_res, labels) in batches:
             encoded_data, skip = self.encoder(low_res)
             decoded_data = self.decoder(encoded_data, skip)
-            
-            mean_pred = torch.mean(decoded_data, dim=(2, 3))  # mean over spatial dimensions (x, y)
-            mean_target = torch.mean(high_res, dim=(2, 3))    # mean over spatial dimensions (x, y)
-            bias_loss = torch.abs(mean_pred - mean_target).mean()
 
-            mse_loss = self.loss_fn(decoded_data, high_res)
+            # mse loss
+            loss = self.loss_fn(decoded_data, high_res)
+
+            # compute Pearson correlation and Pearson loss
             pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
             pearson_loss = 1 - torch.mean(pearson_corr)
-#             perceptual_loss = self.perceptual_loss_fn(decoded_data, high_res) 
-#             pearson_loss = perceptual_loss            
-            
-            combined_loss = mse_loss + lambda_pearson * pearson_loss + 0.1*bias_loss
+
+#             # compute tv loss (for regularization)
+#             tv_loss = self.tv_loss(decoded_data)
+
+            # combined loss
+            combined_loss = loss + lambda_pearson*pearson_loss #+ lambda_l1*tv_loss
+
+            # Backward pass
+            self.optim.zero_grad()
             combined_loss.backward()
             self.optim.step()
-            train_loss.append(mse_loss.item())
-            train_pearson_loss.append(pearson_loss.item())
-            train_bias_loss.append(bias_loss.item())
+
+            # Append the combined loss to the train loss list
+            train_loss.append(loss.detach().cpu().numpy())
+            train_pearson_loss.append(pearson_loss.detach().cpu().numpy())
 
         mean_loss = np.mean(train_loss)
-        mean_pearson_loss = np.mean(train_pearson_loss)
-
-#         mean_bias_loss = np.mean(train_bias_loss)
-
-        mean_bias_loss = 0
-
-        mean_d_loss = 0
-        return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
+        mean_pearson_loss=np.mean(train_pearson_loss)
+        return float(mean_loss), float(mean_pearson_loss)
 
     def __test_epoch(self, batches, save_arr=None):
         test_loss = []
         test_pearson_loss=[]
-        test_bias_loss=[]
         self.encoder.eval()
         self.decoder.eval()
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for (low_res, high_res, labels) in batches:
-                encoded_data, skip = self.encoder(low_res)
-                decoded_data = self.decoder(encoded_data, skip)
+                # Encode data
+                encoded_data,skip = self.encoder(low_res)
+                decoded_data = self.decoder(encoded_data,skip)
+                
                 pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
                 pearson_loss = 1 - torch.mean(pearson_corr)  
                 test_pearson_loss.append(pearson_loss.detach().cpu().numpy())
-
-#                 mean_pred = torch.mean(decoded_data, dim=(2, 3))  # mean over spatial dimensions (x, y)
-#                 mean_target = torch.mean(high_res, dim=(2, 3))    # mean over spatial dimensions (x, y)
-#                 bias_loss = torch.abs(mean_pred - mean_target).mean()  
-#                 test_bias_loss.append(bias_loss.detach().cpu().numpy())
-
+                
                 loss = self.loss_fn(decoded_data, high_res)
                 test_loss.append(loss.detach().cpu().numpy())
                 if save_arr is not None:
@@ -330,10 +303,9 @@ class UNET(BaseModel):
                 ctr += self.batch_size
                 
         mean_loss = np.mean(test_loss)
-        mean_pearson_loss = np.mean(test_pearson_loss)
-#         mean_bias_loss = np.mean(test_bias_loss)
-        mean_bias_loss = 0
-        return float(mean_loss), float(mean_pearson_loss),float(mean_bias_loss)
+        mean_pearson_loss=np.mean(test_pearson_loss)
+        return float(mean_loss),float(mean_pearson_loss)
+     
 
     def score(self, batches, save_arr):
         self.encoder.eval()
@@ -341,16 +313,30 @@ class UNET(BaseModel):
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for input_data in batches:
-                encoded_data, skip = self.encoder(input_data)
-                decoded_data = self.decoder(encoded_data, skip)
+                encoded_data,skip = self.encoder(input_data)
+                decoded_data = self.decoder(encoded_data,skip)
+                # Convert to CPU and then to NumPy for inspection
+                encoded_data_np = encoded_data.cpu().numpy()
+                decoded_data_np = decoded_data.cpu().numpy()
+
+                # Debugging: Print or inspect these variables
+                # print("encoded_data_np:", encoded_data_np)
+                # print("decoded_data:", decoded_data_np)                   
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
                 ctr += self.batch_size
 
-    def get_lr(self, optimizer):
-        for param_group in optimizer.param_groups:
-            return param_group['lr']
-        
     def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", testing_paths=""):
+        """
+        Train the model (or continue training)
+
+        :param input_variables: names of th input variables in training/test datasets
+        :param output_variable: name of the output variable in training/test datasets
+        :param training_ds: an xarray dataset containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
+        :param testing_ds: an xarray dataset to use for testing only.  Format as above
+        :param model_path: path to save model to after training
+        :param training_paths: a string providing a lst of all the training data paths
+        :param testing_paths: a string providing a list of all the test data paths
+        """
         train_ds = DSDataset(training_ds, input_variables, output_variable,
                              normalise_in=self.normalise_input, normalise_out=self.normalise_output)
         self.set_input_spec(train_ds.get_input_spec())
@@ -376,9 +362,9 @@ class UNET(BaseModel):
             self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
         if not self.decoder:
             self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-#         if not self.discriminator:
-#             self.discriminator = Discriminator(output_chan)  # Ensure discriminator input channels match output image channels
-        
+        if not self.discriminator
+            self.discriminator = Discriminator(input_chan)
+            
         fill_value = 0  
         fill = tuple([fill_value] * input_chan)
             
@@ -410,44 +396,54 @@ class UNET(BaseModel):
         start = time.time()
 
         self.loss_fn = torch.nn.MSELoss()
+#         self.loss_fn = PearsonMSELoss()
+
+        params_to_optimize = [
+            {'params': self.encoder.parameters()},
+            {'params': self.decoder.parameters()}
+        ]
+
+        self.optim = torch.optim.Adam(params_to_optimize, lr=self.lr, weight_decay=self.weight_decay)
+
         self.encoder.to(device)
         self.decoder.to(device)
-#         self.discriminator.to(device)
 
-        self.optim = torch.optim.Adam(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optim, T_0=500, T_mult=2, eta_min=1e-6)
+        train_batches = []
+        for low_res, high_res, labels in train_loader:
+            low_res = low_res.to(device)
+            high_res = high_res.to(device)
+            train_batches.append((low_res, high_res, labels))
 
-        train_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in train_loader]
-        test_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in test_loader]
+        test_batches = []
+        for low_res, high_res, labels in test_loader:
+            low_res = low_res.to(device)
+            high_res = high_res.to(device)
+            test_batches.append((low_res, high_res, labels))
 
+        train_loss = test_loss = 0.0
+        train_pearson_loss = trest_pearson_loss = 0.0
         try:
             for epoch in range(self.nr_epochs):
-                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches)
-                scheduler.step()
+                train_loss,train_pearson_loss = self.__train_epoch(train_batches)
                 if epoch % self.test_interval == 0:
-                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches)
-#                     scheduler_D.step(test_loss)     
-                    lr = self.get_lr(self.optim)
-#                     lr_D = self.get_lr(self.optim_D)                    
+                    test_loss,test_pearson_loss = self.__test_epoch(test_batches)
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
-                    print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, train_bias_loss: {train_bias_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}, test_bias_loss: {test_bias_loss:.6f}")
-#                     print(f"epoch: {epoch}, adversarial:g: {train_bias_loss:.6f} d: {train_d_loss:.6f}")
-                    print(f"learn rate: {lr:.6f}")
+                    print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
                     
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
         finally:
             end = time.time()
             elapsed = end - start
+            
 
-        self.history['nr_epochs'] += self.nr_epochs
+        self.history['nr_epochs'] = self.history['nr_epochs'] + self.nr_epochs
 
         print("elapsed:" + str(elapsed))
 
         if self.db:
-            self.db.add_training_result(self.get_model_id(), "UNET", output_variable, input_variables, self.summary(),
+            self.db.add_training_result(self.get_model_id(), "ConvAE", output_variable, input_variables, self.summary(),
                                         model_path, training_paths, train_loss, testing_paths, test_loss, self.get_parameters(), self.spec.save())
         if model_path:
             self.save(model_path)
@@ -458,22 +454,12 @@ class UNET(BaseModel):
         metrics["test"] = self.evaluate(test_ds, device)
         metrics["train"] = self.evaluate(train_ds, device)
 
-        self.dump_metrics("Test Metrics", metrics["test"])
-        self.dump_metrics("Train Metrics", metrics["train"])
+        self.dump_metrics("Test Metrics",metrics["test"])
+        self.dump_metrics("Train Metrics",metrics["train"])
 
         if self.db:
             self.db.add_evaluation_result(self.get_model_id(), training_paths, testing_paths, metrics)
 
-    def score(self, batches, save_arr):
-        self.encoder.eval()
-        self.decoder.eval()
-        with torch.no_grad():  # No need to track the gradients
-            ctr = 0
-            for input_data in batches:
-                encoded_data, skip = self.encoder(input_data)
-                decoded_data = self.decoder(encoded_data, skip)
-                save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
-                ctr += self.batch_size
 
     def summary(self):
         """
@@ -494,6 +480,7 @@ class UNET(BaseModel):
             return s
         else:
             return "Model has not been trained - no layers assigned yet"
+
 
     def save(self, to_folder):
         """
@@ -554,10 +541,10 @@ class UNET(BaseModel):
             self.normalise_input = parameters["normalise_input"]
             self.normalise_output = parameters["normalise_output"]
 
-            self.conv_kernel_size = parameters.get("conv_kernel_size", None)
-            self.conv_stride = parameters.get("conv_stride", None)
-            self.conv_input_layer_count = parameters.get("conv_input_layer_count", None)
-            self.conv_output_layer_count = parameters.get("conv_output_layer_count", None)
+            self.conv_kernel_size = parameters.get("conv_kernel_size",None)
+            self.conv_stride = parameters.get("conv_stride",None)
+            self.conv_input_layer_count = parameters.get("conv_input_layer_count",None)
+            self.conv_output_layer_count = parameters.get("conv_output_layer_count",None)
 
         history_path = os.path.join(from_folder, "history.json")
         with open(history_path) as f:
@@ -579,11 +566,11 @@ class UNET(BaseModel):
         self.decoder.eval()
         super().load(from_folder)
 
-    def pearson_corr_torch(self, decoded_data, high_res):
+    def pearson_corr_torch(self,decoded_data, high_res):
         # flatten
         decoded_data_flat = decoded_data.view(decoded_data.size(0), decoded_data.size(1), -1)
         high_res_flat = high_res.view(high_res.size(0), high_res.size(1), -1)
-        
+
         # compute the mean
         mean_decoded = torch.mean(decoded_data_flat, dim=2, keepdim=True)
         mean_high_res = torch.mean(high_res_flat, dim=2, keepdim=True)

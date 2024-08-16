@@ -38,7 +38,7 @@ class ChannelAttention(nn.Module):
         return self.sigmoid(out)
 
 class Encoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.3):
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.5):
         super().__init__()
 
         encoder_layers = []
@@ -79,7 +79,7 @@ class Encoder(nn.Module):
         return x, x_skip
 
 class Decoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.3):
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.5):
         super().__init__()
 
         (chan, y, x) = layers[0].get_input_dimensions()
@@ -104,7 +104,7 @@ class Decoder(nn.Module):
             output_channels = layer.get_output_dimensions()[0]
             decoder_layers.append(
                 nn.ConvTranspose2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                   stride=layer.get_stride(), padding=layer.get_output_padding()))
+                                   stride=layer.get_stride(), output_padding=layer.get_output_padding()))
             if layer != layers[-1]:
                 self.attention_layers.append(ChannelAttention(output_channels))                
                 decoder_layers.append(nn.BatchNorm2d(output_channels * 2))
@@ -416,7 +416,7 @@ class UNET(BaseModel):
 
         self.optim = torch.optim.Adam(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
         
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optim, T_0=500, T_mult=2, eta_min=1e-6)
+        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optim, T_0=50, T_mult=1, eta_min=0)
 
         train_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in train_loader]
         test_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in test_loader]
