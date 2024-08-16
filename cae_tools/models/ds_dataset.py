@@ -78,6 +78,7 @@ class DSDataset(torch.utils.data.Dataset):
 
     def set_normalisation_parameters(self, parameters):
         (self.min_inputs, self.max_inputs, self.min_output, self.max_output) = tuple(parameters)
+        print(self.min_inputs, self.max_inputs, self.min_output, self.max_output)
 
     def get_input_shape(self):
         return (self.input_chan, self.input_y, self.input_x)

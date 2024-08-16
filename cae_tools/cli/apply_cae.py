@@ -17,9 +17,13 @@ import argparse
 import os
 import json
 import xarray as xr
+import numpy as np
 
 from cae_tools.models.conv_ae_model import ConvAEModel
 from cae_tools.models.var_ae_model import VAEUNET
+from cae_tools.models.vae_train import VAE_Train
+from cae_tools.models.unet_res_train import UNET_RES_Train
+from cae_tools.models.srcnn_res_train import SRCNN_RES_Train
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.unet import UNET
 from cae_tools.models.resunet import RESUNET
@@ -48,12 +52,16 @@ def main():
         mt = ConvAEModel()
     elif parameters["type"] == "UNET":
         mt = UNET()
-    elif parameters["type"] == "RESUNET":
-        mt = RESUNET()       
+    elif parameters["type"] == "SRCNN_RES":
+        mt = SRCNN_RES_Train()       
     elif parameters["type"] == "RESUNET_GAN":
         mt = RESUNET_GAN()            
     elif parameters["type"] == "VAEUNET":
         mt = VAEUNET()
+    elif parameters["type"] == "UNET_RES":
+        mt = UNET_RES_Train()           
+    elif parameters["type"] == "VAE":
+        mt = VAE_Train()        
     elif parameters["type"] == "LinearModel":
         mt = LinearModel()
 
@@ -81,6 +89,25 @@ def main():
     case_dimension = input_ds[0][input_variable_names[0]].dims[0]
     score_ds = input_ds[0] if len(input_ds) == 1 else xr.concat(input_ds, dim=case_dimension)
 
+    # for scaler inputs, broadcast them to have the same dimension as output variable: 
+    for var in args.input_variables:
+        dims = score_ds[var].dims
+        if dims == (case_dimension,):
+            print(f"Variable '{var}' does not follow the dimension (box, channel, y, x). Extending dimensions...")
+            # Check if 'y' and 'x' dimensions exist
+            if 'y' in score_ds.dims and 'x' in score_ds.dims:
+                y_dim, x_dim = score_ds.dims['y'], score_ds.dims['x']
+            else:
+                raise ValueError("'y' and 'x' dimensions not found in the dataset.")
+
+            # Get the original values
+            original_values = score_ds[var].values  
+            
+            expanded_values = np.broadcast_to(original_values[:, np.newaxis, np.newaxis, np.newaxis], (original_values.shape[0], 1, y_dim, x_dim))
+            expanded_var = xr.DataArray(expanded_values, coords={case_dimension: score_ds[case_dimension], 'channel': [0], 'y': np.arange(y_dim), 'x': np.arange(x_dim)}, dims=(case_dimension, 'channel', 'y', 'x'))
+
+            score_ds[var] = expanded_var             
+    
     print("Applying model for %d cases" % score_ds[case_dimension].shape[0])
 
     mt.apply(score_ds, input_variable_names, args.prediction_variable)

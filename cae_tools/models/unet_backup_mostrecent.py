@@ -18,6 +18,29 @@ from .model_sizer import create_model_spec, ModelSpec
 from .ds_dataset import DSDataset
 from ..utils.model_database import ModelDatabase
 
+class Discriminator(nn.Module):
+    def __init__(self, input_channels):
+        super(Discriminator, self).__init__()
+        self.model = nn.Sequential(
+            nn.Conv2d(input_channels, 64, kernel_size=4, stride=2, padding=1),  # (batch_size, 64, 50, 50)
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),  # (batch_size, 128, 25, 25)
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),  # (batch_size, 256, 12, 12)
+            nn.BatchNorm2d(256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(256, 512, kernel_size=4, stride=2, padding=1),  # (batch_size, 512, 6, 6)
+            nn.BatchNorm2d(512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(512, 1, kernel_size=4, stride=1, padding=0),  # (batch_size, 1, 3, 3)
+            nn.Flatten(),  # (batch_size, 9)
+            nn.Linear(9, 1),  # (batch_size, 1)
+            nn.Sigmoid()  # Output a value between 0 and 1
+        )
+
+    def forward(self, x):
+        return self.model(x)
 
 class ChannelAttention(nn.Module):
     def __init__(self, in_planes, ratio=8):
@@ -38,7 +61,7 @@ class ChannelAttention(nn.Module):
         return self.sigmoid(out)
 
 class Encoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.3):
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.4):
         super().__init__()
 
         encoder_layers = []
@@ -79,7 +102,7 @@ class Encoder(nn.Module):
         return x, x_skip
 
 class Decoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.3):
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.4):
         super().__init__()
 
         (chan, y, x) = layers[0].get_input_dimensions()
@@ -104,7 +127,7 @@ class Decoder(nn.Module):
             output_channels = layer.get_output_dimensions()[0]
             decoder_layers.append(
                 nn.ConvTranspose2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                   stride=layer.get_stride(), padding=layer.get_output_padding()))
+                                   stride=layer.get_stride(), output_padding=layer.get_output_padding()))
             if layer != layers[-1]:
                 self.attention_layers.append(ChannelAttention(output_channels))                
                 decoder_layers.append(nn.BatchNorm2d(output_channels * 2))
@@ -129,12 +152,20 @@ class Decoder(nn.Module):
         x = torch.sigmoid(x)
         return x 
 
+class BiasCorrectionLayer(nn.Module):
+    def __init__(self, input_shape):
+        super(BiasCorrectionLayer, self).__init__()
+        self.bias = nn.Parameter(torch.zeros(input_shape))
+
+    def forward(self, x):
+        return x + self.bias   
+
 class VGGPerceptualLoss(nn.Module):
     def __init__(self, layers=[0,5, 10, 19, 28], device='cuda'):
         super(VGGPerceptualLoss, self).__init__()
         vgg = models.vgg19(pretrained=True).features
         self.layers = layers  # Select layers to use for perceptual loss
-        self.perceptual_encoder = nn.Sequential(*list(vgg)[:9]).to(device).eval()  # 
+        self.perceptual_encoder = nn.Sequential(*list(vgg)[:16]).to(device).eval()  # 
         for param in self.perceptual_encoder.parameters():
             param.requires_grad = False
 
@@ -217,6 +248,8 @@ class UNET(BaseModel):
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
         self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
+        self.bias_correction_layer = BiasCorrectionLayer()
+        
 
     def get_parameters(self):
         return {
@@ -265,7 +298,7 @@ class UNET(BaseModel):
         flag_pearson = False
         train_loss = []
         train_pearson_loss=[]
-        train_bias_loss = []
+        train_g_loss = []
         train_d_loss = []
 
         for i, (low_res, high_res, labels) in enumerate(batches):
@@ -275,38 +308,35 @@ class UNET(BaseModel):
             self.optim.zero_grad()
             encoded_data, skip = self.encoder(low_res)
             decoded_data = self.decoder(encoded_data, skip)
-            
-            mean_pred = torch.mean(decoded_data, dim=(2, 3))  # mean over spatial dimensions (x, y)
-            mean_target = torch.mean(high_res, dim=(2, 3))    # mean over spatial dimensions (x, y)
-            bias_loss = torch.abs(mean_pred - mean_target).mean()
+            decoded_data = self.bias_correction_layer(decoded_data)
 
+#             g_loss = self.adversarial_loss(self.discriminator(decoded_data), valid)
             mse_loss = self.loss_fn(decoded_data, high_res)
-            pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
-            pearson_loss = 1 - torch.mean(pearson_corr)
-#             perceptual_loss = self.perceptual_loss_fn(decoded_data, high_res) 
-#             pearson_loss = perceptual_loss            
+#             pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
+#             pearson_loss = 1 - torch.mean(pearson_corr)
+            perceptual_loss = self.perceptual_loss_fn(decoded_data, high_res) 
+            pearson_loss = perceptual_loss            
             
-            combined_loss = mse_loss + lambda_pearson * pearson_loss + 0.1*bias_loss
+            combined_loss = mse_loss + lambda_pearson * pearson_loss 
             combined_loss.backward()
             self.optim.step()
             train_loss.append(mse_loss.item())
             train_pearson_loss.append(pearson_loss.item())
-            train_bias_loss.append(bias_loss.item())
 
         mean_loss = np.mean(train_loss)
         mean_pearson_loss = np.mean(train_pearson_loss)
-
-#         mean_bias_loss = np.mean(train_bias_loss)
-
-        mean_bias_loss = 0
-
+#         if pearson_loss <= 0.30:
+#             flag_pearson = True
+#         if flag_pearson:    
+#             print(f"perceptual loss switched off at {pearson_loss}")
+#             lambda_pearson = 0        
+        mean_g_loss = 0
         mean_d_loss = 0
-        return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
+        return float(mean_loss), float(mean_pearson_loss), float(mean_g_loss), float(mean_d_loss)
 
     def __test_epoch(self, batches, save_arr=None):
         test_loss = []
         test_pearson_loss=[]
-        test_bias_loss=[]
         self.encoder.eval()
         self.decoder.eval()
         with torch.no_grad():  # No need to track the gradients
@@ -314,15 +344,12 @@ class UNET(BaseModel):
             for (low_res, high_res, labels) in batches:
                 encoded_data, skip = self.encoder(low_res)
                 decoded_data = self.decoder(encoded_data, skip)
+                 decoded_data = self.bias_correction_layer(decoded_data)
+               
                 pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
                 pearson_loss = 1 - torch.mean(pearson_corr)  
                 test_pearson_loss.append(pearson_loss.detach().cpu().numpy())
-
-#                 mean_pred = torch.mean(decoded_data, dim=(2, 3))  # mean over spatial dimensions (x, y)
-#                 mean_target = torch.mean(high_res, dim=(2, 3))    # mean over spatial dimensions (x, y)
-#                 bias_loss = torch.abs(mean_pred - mean_target).mean()  
-#                 test_bias_loss.append(bias_loss.detach().cpu().numpy())
-
+                
                 loss = self.loss_fn(decoded_data, high_res)
                 test_loss.append(loss.detach().cpu().numpy())
                 if save_arr is not None:
@@ -331,9 +358,7 @@ class UNET(BaseModel):
                 
         mean_loss = np.mean(test_loss)
         mean_pearson_loss = np.mean(test_pearson_loss)
-#         mean_bias_loss = np.mean(test_bias_loss)
-        mean_bias_loss = 0
-        return float(mean_loss), float(mean_pearson_loss),float(mean_bias_loss)
+        return float(mean_loss), float(mean_pearson_loss)
 
     def score(self, batches, save_arr):
         self.encoder.eval()
@@ -415,26 +440,28 @@ class UNET(BaseModel):
 #         self.discriminator.to(device)
 
         self.optim = torch.optim.Adam(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        
-        scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(self.optim, T_0=500, T_mult=2, eta_min=1e-6)
+#         self.optim_D = torch.optim.Adam(self.discriminator.parameters(), lr=self.lr/5, weight_decay=self.weight_decay)
+
+#         scheduler_G = optim.lr_scheduler.ReduceLROnPlateau(self.optim, mode='min', factor=0.1, patience=30, verbose=True)
+#         scheduler_D = optim.lr_scheduler.ReduceLROnPlateau(self.optim_D, mode='min', factor=0.1, patience=30, verbose=True)        
 
         train_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in train_loader]
         test_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in test_loader]
 
         try:
             for epoch in range(self.nr_epochs):
-                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches)
-                scheduler.step()
+                train_loss, train_pearson_loss, train_g_loss, train_d_loss = self.__train_epoch(train_batches)
                 if epoch % self.test_interval == 0:
-                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches)
+                    test_loss, test_pearson_loss = self.__test_epoch(test_batches)
+#                     scheduler_G.step(test_loss)
 #                     scheduler_D.step(test_loss)     
-                    lr = self.get_lr(self.optim)
+                    lr_G = self.get_lr(self.optim)
 #                     lr_D = self.get_lr(self.optim_D)                    
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
-                    print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, train_bias_loss: {train_bias_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}, test_bias_loss: {test_bias_loss:.6f}")
-#                     print(f"epoch: {epoch}, adversarial:g: {train_bias_loss:.6f} d: {train_d_loss:.6f}")
-                    print(f"learn rate: {lr:.6f}")
+                    print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
+#                     print(f"epoch: {epoch}, adversarial:g: {train_g_loss:.6f} d: {train_d_loss:.6f}")
+#                     print(f"learn rate: g: {lr_G:.6f}  d {lr_D:.6f}")
                     
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
@@ -583,7 +610,7 @@ class UNET(BaseModel):
         # flatten
         decoded_data_flat = decoded_data.view(decoded_data.size(0), decoded_data.size(1), -1)
         high_res_flat = high_res.view(high_res.size(0), high_res.size(1), -1)
-        
+
         # compute the mean
         mean_decoded = torch.mean(decoded_data_flat, dim=2, keepdim=True)
         mean_high_res = torch.mean(high_res_flat, dim=2, keepdim=True)

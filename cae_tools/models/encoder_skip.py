@@ -41,7 +41,7 @@ class Encoder(nn.Module):
             input_channels = layer.get_input_dimensions()[0]
             output_channels = layer.get_output_dimensions()[0]
             encoder_layers.append(nn.Conv2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
-                                            stride=layer.get_stride()))
+                                            stride=layer.get_stride(),padding=layer.get_output_padding()))
             encoder_layers.append(nn.BatchNorm2d(output_channels))
             encoder_layers.append(nn.ReLU(True))
 
