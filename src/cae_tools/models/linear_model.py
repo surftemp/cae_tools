@@ -135,7 +135,7 @@ class LinearModel(BaseModel):
         self.weights = Linear(self.input_shape,self.output_shape)
 
         weights_path = os.path.join(from_folder, "weights")
-        self.weights.load_state_dict(torch.load(weights_path))
+        self.weights.load_state_dict(self.torch_load(weights_path))
         self.weights.eval()
         super().load(from_folder)
 

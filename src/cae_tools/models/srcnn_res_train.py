@@ -234,7 +234,7 @@ class SRCNN_RES_Train(BaseModel):
         self.srcnn_res = SRCNN_RES(self.input_shape[0],num_res_layers=self.num_res_layers)
 
         srcnn_res_path = os.path.join(from_folder, "srcnn_res.weights")
-        self.srcnn_res.load_state_dict(torch.load(srcnn_res_path))
+        self.srcnn_res.load_state_dict(self.torch_load(srcnn_res_path))
         self.srcnn_res.eval()
         super().load(from_folder)        
         

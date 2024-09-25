@@ -234,7 +234,7 @@ class UNET_RES_Train(BaseModel):
         self.unet_res = UNET_RES(self.spec.get_input_layers(), self.spec.get_output_layers(), num_res_layers=self.num_res_layers)
 
         unet_res_path = os.path.join(from_folder, "unet_res.weights")
-        self.unet_res.load_state_dict(torch.load(unet_res_path))
+        self.unet_res.load_state_dict(self.torch_load(unet_res_path))
         self.unet_res.eval()
         super().load(from_folder)        
         

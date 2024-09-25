@@ -32,6 +32,12 @@ class BaseModel:
         self.output_spec = None
         self.model_id = str(uuid.uuid4())
 
+    def torch_load(self, from_path):
+        if torch.cuda.is_available():
+            return torch.load(from_path)
+        else:
+            return torch.load(from_path, map_location=torch.device('cpu'))
+
     def set_input_spec(self, input_spec):
         self.input_spec = input_spec
 

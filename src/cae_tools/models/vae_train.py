@@ -234,7 +234,7 @@ class VAE_Train(BaseModel):
         self.vae = VAE(self.spec.get_input_layers(), self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, num_res_layers=self.num_res_layers)
 
         vae_path = os.path.join(from_folder, "vae.weights")
-        self.vae.load_state_dict(torch.load(vae_path))
+        self.vae.load_state_dict(self.torch_load(vae_path))
         self.vae.eval()
         super().load(from_folder)        
         

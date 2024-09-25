@@ -191,13 +191,13 @@ class RESUNET_GAN(BaseModel):
         self.discriminator = Discriminator(input_channels=self.input_shape[0], feature_maps=self.discriminator_feature_maps)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
-        self.encoder.load_state_dict(torch.load(encoder_path))
+        self.encoder.load_state_dict(self.torch_load(encoder_path))
         self.encoder.eval()
         decoder_path = os.path.join(from_folder, "decoder.weights")
-        self.decoder.load_state_dict(torch.load(decoder_path))
+        self.decoder.load_state_dict(self.torch_load(decoder_path))
         self.decoder.eval()
         discriminator_path = os.path.join(from_folder, "discriminator.weights")
-        self.discriminator.load_state_dict(torch.load(discriminator_path))
+        self.discriminator.load_state_dict(self.torch_load(discriminator_path))
         self.discriminator.eval()
         super().load(from_folder)
 

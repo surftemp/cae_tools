@@ -90,7 +90,7 @@ def main():
     score_ds = input_ds[0] if len(input_ds) == 1 else xr.concat(input_ds, dim=case_dimension)
 
     # for scaler inputs, broadcast them to have the same dimension as output variable: 
-    for var in args.input_variables:
+    for var in model_input_variable_names:
         dims = score_ds[var].dims
         if dims == (case_dimension,):
             print(f"Variable '{var}' does not follow the dimension (box, channel, y, x). Extending dimensions...")

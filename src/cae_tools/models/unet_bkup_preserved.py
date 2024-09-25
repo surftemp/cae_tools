@@ -362,7 +362,7 @@ class UNET(BaseModel):
             self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
         if not self.decoder:
             self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
-        if not self.discriminator
+        if not self.discriminator:
             self.discriminator = Discriminator(input_chan)
             
         fill_value = 0  
@@ -559,10 +559,10 @@ class UNET(BaseModel):
         self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
-        self.encoder.load_state_dict(torch.load(encoder_path))
+        self.encoder.load_state_dict(self.torch_load(encoder_path))
         self.encoder.eval()
         decoder_path = os.path.join(from_folder, "decoder.weights")
-        self.decoder.load_state_dict(torch.load(decoder_path))
+        self.decoder.load_state_dict(self.torch_load(decoder_path))
         self.decoder.eval()
         super().load(from_folder)
 

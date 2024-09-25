@@ -344,7 +344,7 @@ class UNET(BaseModel):
             for (low_res, high_res, labels) in batches:
                 encoded_data, skip = self.encoder(low_res)
                 decoded_data = self.decoder(encoded_data, skip)
-                 decoded_data = self.bias_correction_layer(decoded_data)
+                decoded_data = self.bias_correction_layer(decoded_data)
                
                 pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
                 pearson_loss = 1 - torch.mean(pearson_corr)  
@@ -599,10 +599,10 @@ class UNET(BaseModel):
         self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
-        self.encoder.load_state_dict(torch.load(encoder_path))
+        self.encoder.load_state_dict(self.torch_load(encoder_path))
         self.encoder.eval()
         decoder_path = os.path.join(from_folder, "decoder.weights")
-        self.decoder.load_state_dict(torch.load(decoder_path))
+        self.decoder.load_state_dict(self.torch_load(decoder_path))
         self.decoder.eval()
         super().load(from_folder)
 

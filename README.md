@@ -11,8 +11,9 @@ A convolutional auto-encoder library for modelling image-to-image transformation
 A suitable conda environment can be obtained using:
 
 ```
-conda create -n pyt python=3.8 pytorch xarray dask netcdf4 pillow seaborn matplotlib scipy
+conda create -n pyt python=3.8 pytorch xarray dask netcdf4 pillow seaborn matplotlib scipy torchvision
 conda activate pyt
+pip install pytorch_msssim
 ```
 
 ## Installation

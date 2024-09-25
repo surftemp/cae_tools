@@ -302,7 +302,7 @@ class UNET(BaseModel):
         self.encoder = MeanPredictorSingleChannel(fc_size=self.fc_size, dropout_rate=0.5)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
-        self.encoder.load_state_dict(torch.load(encoder_path))
+        self.encoder.load_state_dict(self.torch_load(encoder_path))
         self.encoder.eval()
         super().load(from_folder)
 
