@@ -93,7 +93,7 @@ def main():
     for var in args.input_variables:
         dims = score_ds[var].dims
         if dims == (case_dimension,):
-            print(f"Variable '{var}' does not follow the dimension (box, channel, y, x). Extending dimensions...")
+#             print(f"Variable '{var}' does not follow the dimension (box, channel, y, x). Extending dimensions...")
             # Check if 'y' and 'x' dimensions exist
             if 'y' in score_ds.dims and 'x' in score_ds.dims:
                 y_dim, x_dim = score_ds.dims['y'], score_ds.dims['x']
