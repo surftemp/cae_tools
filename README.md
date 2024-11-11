@@ -8,11 +8,12 @@ A convolutional auto-encoder library for modelling image-to-image transformation
 
 `evaluate_cae` requires xarray, netcdf4, pillow, seaborn, matplotlib
 
-A suitable conda environment can be obtained using:
+Installation into a miniforge enviromnent is suggested.  See [https://github.com/conda-forge/miniforge](https://github.com/conda-forge/miniforge) for installing miniforge.
+
 
 ```
-conda create -n pyt python=3.8 pytorch xarray dask netcdf4 pillow seaborn matplotlib scipy torchvision
-conda activate pyt
+mamba create -n pyt python=3.8 pytorch xarray dask netcdf4 pillow seaborn matplotlib scipy torchvision pyproj
+mamba activate pyt
 pip install pytorch_msssim
 ```
 
