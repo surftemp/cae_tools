@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--lambda-ssim", type=float, help="controls the strength of the ssim loss", default=1)    
     parser.add_argument("--lambda-additional", type=float, help="controls the strength of additional regularization", default=1) 
     parser.add_argument("--weight-decay", type=float, help="weight decay coefficient", default=1e-5)
+    parser.add_argument("--dropout-rate", type=float, help="dropout rate", default=1e-1)
     parser.add_argument("--additional-loss", type=str, help="additional loss types ('contrastive', 'histogram', 'perceptual')", default=None)    
     parser.add_argument("--scheduler-type", type=str, help="scheduler type ('StepLR', 'ReduceLROnPlateau', 'ExponentialLR','CosineAnnealingLR')", default=None)        
     parser.add_argument("--method", choices=["conv", "unet","unet_res", "srcnn_res", "resunet_gan","var","vae", "linear"], default="var", help="methods")
@@ -80,8 +81,6 @@ def main():
     for var in args.input_variables:
         dims = train_ds[var].dims
         if dims == (case_dimension,):
-            print(f"Variable '{var}' does not follow the dimension (box, channel, y, x). Extending dimensions...")
-            # Check if 'y' and 'x' dimensions exist
             if 'y' in train_ds.dims and 'x' in train_ds.dims:
                 y_dim, x_dim = train_ds.dims['y'], train_ds.dims['x']
             else:
@@ -99,8 +98,6 @@ def main():
     for var in args.input_variables:
         dims = test_ds[var].dims
         if dims == (case_dimension,):
-            print(f"Variable '{var}' does not follow the dimension (box, channel, y, x). Extending dimensions...")
-            # Check if 'y' and 'x' dimensions exist
             if 'y' in test_ds.dims and 'x' in test_ds.dims:
                 y_dim, x_dim = test_ds.dims['y'], test_ds.dims['x']
             else:
@@ -153,7 +150,7 @@ def main():
                         batch_size=args.batch_size, lr=args.learning_rate,lr_step_size=args.lr_step_size,lr_gamma=args.lr_gamma, scheduler_type=args.scheduler_type, weight_decay=args.weight_decay, database_path=args.database_path, additional_loss_type=args.additional_loss)            
         elif args.method == "unet":
             mt = UNET(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
-                             batch_size=args.batch_size, lr=args.learning_rate,lambda_l1=args.lambda_l1,lambda_pearson=args.lambda_pearson,                                                database_path=args.database_path,weight_decay=args.weight_decay)
+                             batch_size=args.batch_size, lr=args.learning_rate,lambda_l1=args.lambda_l1,lambda_pearson=args.lambda_pearson,                                                database_path=args.database_path,weight_decay=args.weight_decay,dropout_rate=args.dropout_rate)
         elif args.method == "unet_res":
             mt = UNET_RES_Train(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs, lambda_mse=args.lambda_mse, lambda_l1=args.lambda_l1, lambda_pearson=args.lambda_pearson, lambda_ssim=args.lambda_ssim, lambda_additional=args.lambda_additional, lambda_kl=args.lambda_kl,
                         batch_size=args.batch_size, lr=args.learning_rate,lr_step_size=args.lr_step_size,lr_gamma=args.lr_gamma, scheduler_type=args.scheduler_type, weight_decay=args.weight_decay, database_path=args.database_path, additional_loss_type=args.additional_loss)            

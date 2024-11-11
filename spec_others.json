@@ -1,0 +1,166 @@
+{
+    "input_layers": [
+        {
+            "is_input": true,
+            "kernel_size": 9,
+            "stride": 2,
+            "output_padding": 3,
+            "input_dimensions": [
+                11,
+                100,
+                100
+            ],
+            "output_dimensions": [
+                16,
+                49,
+                49
+            ]
+        },       
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 2,
+            "output_padding": 0,
+            "input_dimensions": [
+                16,
+                49,
+                49
+            ],
+            "output_dimensions": [
+                32,
+                24,
+                24
+            ]
+        },             
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                32,
+                24,
+                24
+            ],
+            "output_dimensions": [
+                64,
+                12,
+                12
+            ]
+        },         
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                64,
+                12,
+                12
+            ],
+            "output_dimensions": [
+                128,
+                6,
+                6
+            ]
+        },   
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                128,
+                6,
+                6
+            ],
+            "output_dimensions": [
+                256,
+                3,
+                3
+            ]
+        }          
+    ],
+    "output_layers": [
+        {
+            "is_input": false,
+            "kernel_size": 4,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                256,
+                3,
+                3
+            ],
+            "output_dimensions": [
+                128,
+                6,
+                6
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 4,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                256,
+                6,
+                6
+            ],
+            "output_dimensions": [
+                64,
+                12,
+                12
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 4,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                128,
+                12,
+                12
+            ],
+            "output_dimensions": [
+                32,
+                24,
+                24
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 5,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                64,
+                24,
+                24
+            ],
+            "output_dimensions": [
+                16,
+                49,
+                49
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 6,
+            "stride": 2,
+            "output_padding": 1,
+            "input_dimensions": [
+                32,
+                49,
+                49
+            ],
+            "output_dimensions": [
+                1,
+                100,
+                100
+            ]
+        }        
+    ]
+}
