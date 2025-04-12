@@ -22,46 +22,46 @@ class ModelMetric:
         self.actuals = []
         self.estimates = []
 
-    def accumulate(self, actual: np.ndarray, estimates: np.ndarray):
+    def accumulate(self, actual: np.ndarray, estimates: np.ndarray, mask: np.ndarray):
+        """
+        Accumulate actual and estimated data for a single instance.
+        Both actual and estimates should have the same shape.
+        The mask should have the same spatial shape (or broadcastable shape) and be binary.
+        Only the values where mask == 1 are accumulated.
+        """
         if actual.shape != estimates.shape:
             raise ValueError("The shapes of 'actual' and 'estimates' must match.")
-
-        # accumulate the actual and estimated data
-
-        self.actuals.append(actual)
-        self.estimates.append(estimates)
+        
+        # flatten the arrays
+        actual_flat = actual.flatten()
+        estimates_flat = estimates.flatten()
+        mask_flat = mask.flatten().astype(bool)  # Convert mask to boolean
+        
+        # take only the elements where mask is True
+        valid_actual = actual_flat[mask_flat]
+        valid_estimates = estimates_flat[mask_flat]
+        
+        self.actuals.append(valid_actual)
+        self.estimates.append(valid_estimates)
 
     def get_metrics(self):
-        # input checks
         if not self.actuals or not self.estimates:
             raise ValueError("No data accumulated to calculate metrics.")
 
-        # concatenate the accumulated data
         all_actuals = np.concatenate(self.actuals)
         all_estimates = np.concatenate(self.estimates)
 
-        #  MSE
         mse = np.mean((all_actuals - all_estimates) ** 2)
-
-        #  RMSE
         rmse = np.sqrt(mse)
-
-        #  MAE
         mae = np.mean(np.abs(all_actuals - all_estimates))
 
-        # Pearson correlation (mean across all instances)
         pearson_correlations = []
         for actual, estimate in zip(self.actuals, self.estimates):
-            # flatten each instance to 1D
-            actual_flat = actual.flatten()
-            estimate_flat = estimate.flatten()
-
-            # calculate Pearson correlation
-            correlation, _ = pearsonr(actual_flat, estimate_flat)
+            if actual.size == 0 or estimate.size == 0:
+                continue
+            correlation, _ = pearsonr(actual, estimate)
             pearson_correlations.append(correlation)
-
-        # mean Pearson correlation across all instances
-        mean_pearson_correlation = np.mean(pearson_correlations)
+        mean_pearson_correlation = np.mean(pearson_correlations) if pearson_correlations else 0.0
 
         return {
             "mse": mse,
@@ -69,3 +69,4 @@ class ModelMetric:
             "mae": mae,
             "mean_pearson_correlation": mean_pearson_correlation
         }
+

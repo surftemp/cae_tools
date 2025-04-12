@@ -67,7 +67,7 @@ class BaseModel:
         if hasattr(self,"encoder"):
             self.encoder.to(device)
         if hasattr(self,"decoder"):
-            self.decoder.to(device)
+            self.decoder.to(device)           
 
         dataset.set_normalise_output(False) # need to avoid normalising outputs when accessing the dataset
 
@@ -77,23 +77,24 @@ class BaseModel:
 
         mm = ModelMetric()
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
-        for input, output_not_norm, labels in loader:
+        for input, output_not_norm, mask, labels in loader:
             # for each batch, score, denormalise the scores and compare with the original outputs
             input = input.to(device)
             score_arr = np.zeros(output_not_norm.shape)
             self.score([input], save_arr=score_arr)
-            output_not_norm = output_not_norm.numpy(force=True)
+            output_not_norm = output_not_norm.numpy()
             score_arr = dataset.denormalise_output(score_arr,force=True)
+            mask_np = mask.cpu().numpy() if mask is not None else np.ones_like(output_not_norm)            
             # feed the instances in each batch into the model metric accumulator
             batch_size = output_not_norm.shape[0]
             for i in range(batch_size):
                 # print(f"step: {i} size of output_not_norm: {output_not_norm.shape} and score_arr: {score_arr.shape}, batch_size: {batch_size}")
-                mm.accumulate(output_not_norm[i,::],score_arr[i,::])
+                mm.accumulate(output_not_norm[i,::],score_arr[i,::],mask_np[i,:,:])
 
         return mm.get_metrics()
 
     def apply(self, score_ds, input_variables, prediction_variable="model_output",
-                channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
+                channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x", mask_variable_name=None):
         """
         Apply this model to input data to produce an output estimate, added to extend score_ds
 
@@ -115,7 +116,7 @@ class BaseModel:
         out_x = self.output_shape[2]
         score_arr = np.zeros(shape=(n,out_chan,out_y,out_x))
 
-        ds = DSDataset(score_ds, input_variables, input_variables[0], normalise_in=self.normalise_input)
+        ds = DSDataset(score_ds, input_variables, input_variables[0], normalise_in=self.normalise_input,mask_variable_name=mask_variable_name)
         ds.set_normalisation_parameters(self.normalisation_parameters)
         val_loader = torch.utils.data.DataLoader(ds, batch_size=self.batch_size)
 
@@ -123,12 +124,20 @@ class BaseModel:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         else:
             device = torch.device("cpu")
-
-        self.encoder.to(device)
-        self.decoder.to(device)
+            
+        if hasattr(self,"encoder"):
+            self.encoder.to(device)
+        if hasattr(self,"decoder"):
+            self.decoder.to(device)
+        if hasattr(self,"vae"):
+            self.vae.to(device)
+        if hasattr(self,"unet_res"):
+            self.unet_res.to(device)   
+        if hasattr(self,"srcnn_res"):
+            self.srcnn_res.to(device)              
 
         score_batches = []
-        for low_res, _, _ in val_loader:
+        for low_res,_, _, _ in val_loader:
             low_res = low_res.to(device)
             score_batches.append(low_res)
 

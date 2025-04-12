@@ -19,7 +19,7 @@ import numpy as np
 
 class DSDataset(torch.utils.data.Dataset):
 
-    def __init__(self, ds, input_variable_names, output_variable_name=None, normalise_in=True, normalise_out=True):
+    def __init__(self, ds, input_variable_names, output_variable_name=None, normalise_in=True, normalise_out=True, mask_variable_name=None):
         self.ds = ds
         self.input_variable_names = input_variable_names
         self.output_variable_name = output_variable_name
@@ -35,7 +35,11 @@ class DSDataset(torch.utils.data.Dataset):
         self.input_y = self.input_das[0].shape[2]
         self.input_x = self.input_das[0].shape[3]
 
-        # check for NaN
+        if mask_variable_name is not None:
+            self.mask_da = self.ds[mask_variable_name]
+        else:
+            self.mask_da = None
+            
         da = self.ds[self.output_variable_name]
         count_nans = np.sum(np.where(np.isnan(da.values),1,0))
         if count_nans > 0:
@@ -78,6 +82,7 @@ class DSDataset(torch.utils.data.Dataset):
 
     def set_normalisation_parameters(self, parameters):
         (self.min_inputs, self.max_inputs, self.min_output, self.max_output) = tuple(parameters)
+        print(self.min_inputs, self.max_inputs, self.min_output, self.max_output)
 
     def get_input_shape(self):
         return (self.input_chan, self.input_y, self.input_x)
@@ -93,7 +98,11 @@ class DSDataset(torch.utils.data.Dataset):
 
     def normalise_input(self, arr, input_name):
         if self.normalise_in:
-            return (arr - self.min_inputs[input_name]) / (self.max_inputs[input_name] - self.min_inputs[input_name])
+            range_val = self.max_inputs[input_name] - self.min_inputs[input_name]
+            if range_val == 0:
+                return 0.0
+            else:
+                return (arr - self.min_inputs[input_name]) / range_val
         else:
             return arr
 
@@ -140,7 +149,36 @@ class DSDataset(torch.utils.data.Dataset):
             out_arr = self.normalise_output(self.output_da[index, :, :, :].values)
         else:
             out_arr = None
-        return (in_arr, out_arr, label)
+
+        mask = self.mask_da[index, :, :, :].values
+        mask = mask.astype(np.float32)
+            
+            
+        return (in_arr, out_arr, mask, label)
+
+#     # changed __getitem__ to adapt to dask lazy input    
+#     def __getitem__(self, index):
+#         label = f"image{index}"
+#         in_arr = np.zeros((self.input_chan, self.input_y, self.input_x), dtype=np.float32)
+#         channel_index = 0
+
+#         for idx, input_name in enumerate(self.input_variable_names):
+#             input_da = self.input_das[idx]
+#             sample = input_da.isel(box=index).compute().values
+#             sample_norm = self.normalise_input(sample, input_name)
+#             nchan = input_da.shape[1]
+#             in_arr[channel_index:channel_index + nchan, :, :] = sample_norm
+#             channel_index += nchan
+
+#         if self.output_da is not None:
+#             out_arr = self.normalise_output(self.output_da.isel(box=index).compute().values)
+#         else:
+#             out_arr = None
+
+#         return (in_arr, out_arr, label)    
 
     def __len__(self):
         return self.n
+    
+
+    

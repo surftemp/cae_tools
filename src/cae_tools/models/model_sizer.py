@@ -15,21 +15,19 @@
 
 class LayerSpec:
 
-    def __init__(self, is_input=True, kernel_size=3, stride=2, input_dimensions=None, output_dimensions=None, output_padding_y=0,
-                 output_padding_x=0):
+    def __init__(self, is_input=True, kernel_size=3, stride=2, input_dimensions=None, output_dimensions=None, output_padding=0):
         self.is_input = is_input
         self.kernel_size = kernel_size # note this may be a integer or a (h,w) tuple
         self.stride = stride
         self.input_dimensions = input_dimensions
         self.output_dimensions = output_dimensions
-        self.output_padding_y = output_padding_y
-        self.output_padding_x = output_padding_x
+        self.output_padding = output_padding
 
     def __repr__(self):
         s = "\tInput Convolutional Layer:\n" if self.is_input else "\tOutput Convolutional Layer:\n"
         s += f"\t\tkernel_size={self.kernel_size}  stride={self.stride}\n"
-        if self.output_padding_x or self.output_padding_y:
-            s += f"\t\toutput_padding=({self.output_padding_y},{self.output_padding_x})\n"
+        if self.output_padding:
+            s += f"\t\toutput_padding=({self.output_padding})\n"
         s += f"\t\t{self.input_dimensions} => {self.output_dimensions}\n"
         return s
 
@@ -46,15 +44,14 @@ class LayerSpec:
         return self.output_dimensions
 
     def get_output_padding(self):
-        return (self.output_padding_y, self.output_padding_x)
+        return self.output_padding
 
     def save(self):
         return {
             "is_input": self.is_input,
             "kernel_size": list(self.kernel_size) if isinstance(self.kernel_size,tuple) else self.kernel_size,
             "stride": self.stride,
-            "output_padding_x": self.output_padding_x,
-            "output_padding_y": self.output_padding_y,
+            "output_padding": self.output_padding,
             "input_dimensions": list(self.input_dimensions),
             "output_dimensions": list(self.output_dimensions)
         }
@@ -65,8 +62,7 @@ class LayerSpec:
         if isinstance(self.kernel_size,list):
             self.kernel_size = tuple(self.kernel_size)
         self.stride = from_obj["stride"]
-        self.output_padding_x = from_obj["output_padding_x"]
-        self.output_padding_y = from_obj["output_padding_y"]
+        self.output_padding = from_obj["output_padding"]
         self.input_dimensions = tuple(from_obj["input_dimensions"])
         self.output_dimensions = tuple(from_obj["output_dimensions"])
 

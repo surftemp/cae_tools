@@ -1,0 +1,134 @@
+{
+    "input_layers": [
+        {
+            "is_input": true,
+            "kernel_size": 9,
+            "stride": 1,
+            "output_padding": 4,
+            "input_dimensions": [
+                5,
+                100,
+                100
+            ],
+            "output_dimensions": [
+                64,
+                50,
+                50
+            ]
+        },       
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 1,
+            "output_padding": 1,
+            "input_dimensions": [
+                64,
+                50,
+                50
+            ],
+            "output_dimensions": [
+                128,
+                25,
+                25
+            ]
+        },             
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 1,
+            "output_padding": 1,
+            "input_dimensions": [
+                128,
+                25,
+                25
+            ],
+            "output_dimensions": [
+                256,
+                12,
+                12
+            ]
+        },         
+        {
+            "is_input": true,
+            "kernel_size": 3,
+            "stride": 1,
+            "output_padding": 1,
+            "input_dimensions": [
+                256,
+                12,
+                12
+            ],
+            "output_dimensions": [
+                512,
+                6,
+                6
+            ]
+        }            
+    ],
+    "output_layers": [
+        {
+            "is_input": false,
+            "kernel_size": 2,
+            "stride": 2,
+            "output_padding": 0,
+            "input_dimensions": [
+                512,
+                6,
+                6
+            ],
+            "output_dimensions": [
+                256,
+                12,
+                12
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 3,
+            "stride": 2,
+            "output_padding": 0,
+            "input_dimensions": [
+                768,
+                12,
+                12
+            ],
+            "output_dimensions": [
+                128,
+                25,
+                25
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 2,
+            "stride": 2,
+            "output_padding": 0,
+            "input_dimensions": [
+                384,
+                25,
+                25
+            ],
+            "output_dimensions": [
+                64,
+                50,
+                50
+            ]
+        },
+        {
+            "is_input": false,
+            "kernel_size": 2,
+            "stride": 2,
+            "output_padding": 0,
+            "input_dimensions": [
+                192,
+                50,
+                50
+            ],
+            "output_dimensions": [
+                32,
+                100,
+                100
+            ]
+        }      
+    ]
+}
