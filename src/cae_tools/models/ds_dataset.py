@@ -150,9 +150,11 @@ class DSDataset(torch.utils.data.Dataset):
         else:
             out_arr = None
 
-        mask = self.mask_da[index, :, :, :].values
-        mask = mask.astype(np.float32)
-            
+        if self.mask_da:
+            mask = self.mask_da[index, :, :, :].values
+            mask = mask.astype(np.float32)
+        else:
+            mask = np.ones((self.input_chan,self.input_y,self.input_x), dtype=np.float32)
             
         return (in_arr, out_arr, mask, label)
 

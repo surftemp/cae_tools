@@ -71,7 +71,7 @@ def main():
     case_dimension = input_ds[input_variable_names[0]].dims[0]
     score_ds = input_ds
 
-    for var in args.input_variables:
+    for var in model_input_variable_names:
         dims = score_ds[var].dims
         if dims == (case_dimension,):
             y_dim, x_dim = score_ds.dims['y'], score_ds.dims['x']
