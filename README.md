@@ -24,6 +24,12 @@ git clone git@github.com:surftemp/cae_tools.git
 cd cae_tools`
 pip install -e .
 ```
+Additional package dependencies:
+```
+pip isntall pytorch_msssim
+pip install optuna
+```
+
 
 ## CLI
 
