@@ -60,6 +60,12 @@ class BaseModel:
     def get_model_id(self):
         return self.model_id
 
+    def torch_load(self, from_path):
+        if torch.cuda.is_available():
+            return torch.load(from_path)
+        else:
+            return torch.load(from_path, map_location=torch.device('cpu'))
+
     def evaluate(self, dataset, device):
 
         # common code across the models to collect metrics
