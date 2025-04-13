@@ -150,7 +150,7 @@ class DSDataset(torch.utils.data.Dataset):
         else:
             out_arr = None
 
-        if self.mask_da:
+        if self.mask_da is not None and self.mask_da.size > 0:
             mask = self.mask_da[index, :, :, :].values
             mask = mask.astype(np.float32)
         else:

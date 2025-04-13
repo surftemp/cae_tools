@@ -166,3 +166,6 @@ test/results
 # ignore spec file and run scripts
 spec_august_ver.json
 train_unet_hyperpar.sh
+
+# ignore all database files
+*.db
