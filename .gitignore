@@ -162,3 +162,7 @@ cython_debug/
 # ignore results from running tests
 test/cli/results
 test/results
+
+# ignore spec file and run scripts
+spec_august_ver.json
+train_unet_hyperpar.sh
