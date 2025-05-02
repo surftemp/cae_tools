@@ -26,7 +26,7 @@ pip install -e .
 ```
 Additional package dependencies:
 ```
-pip isntall pytorch_msssim
+pip install pytorch_msssim
 pip install optuna
 ```
 
