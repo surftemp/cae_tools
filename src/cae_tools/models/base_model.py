@@ -31,6 +31,13 @@ class BaseModel:
         self.input_spec = None
         self.output_spec = None
         self.model_id = str(uuid.uuid4())
+        
+    def torch_load(self, path):
+        """Load a torch file, handling CPU/GPU compatibility"""
+        if torch.cuda.is_available():
+            return torch.load(path)
+        else:
+            return torch.load(path, map_location=torch.device('cpu'))        
 
     def set_input_spec(self, input_spec):
         self.input_spec = input_spec
