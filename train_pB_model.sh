@@ -21,8 +21,8 @@ layerDefinitionsPath="pB_spec.json"
 databasePath="database_pB_stable.db"
 
 # ---- Data folders ----
-trainFolder="/lustre_scratch/shaerdan/data_folder/train_v4/train/processed_train/"
-testFolder="/lustre_scratch/shaerdan/data_folder/train_v4/test/processed_test/"
+trainFolder="/gws/nopw/j04/eocis_chuk/shaerdan/train_v4/train/processed_train/"
+testFolder="/gws/nopw/j04/eocis_chuk/shaerdan/test_v4/test/processed_test/"
 
 # ---- Collect training files ----
 trainPaths=()
@@ -41,7 +41,7 @@ testPathsString="${testPaths[@]}"
 # ---- Generate unique model ID ----
 hash=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1)
 echo "Output Hash: $hash"
-echo "Model will be saved to: /lustre_scratch/shaerdan/models/model_pB_$hash"
+echo "Model will be saved to: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_$hash"
 
 # ---- Input variables (12 channels - exact match to pB model) ----
 INPUT_VARS="land_cover albedo_monthly_climatology_means elevation era5_skt sin_doy cos_doy slope_magnitude slope_direction urban_area suburban_area pixel_st_hot_pattern pixel_st_cold_pattern"
@@ -50,7 +50,7 @@ INPUT_VARS="land_cover albedo_monthly_climatology_means elevation era5_skt sin_d
 train_cae \
     --train-inputs ${trainPathsString} \
     --test-inputs ${testPathsString} \
-    --model-folder "/lustre_scratch/shaerdan/models/model_pB_$hash" \
+    --model-folder "/gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_$hash" \
     --input-variables ${INPUT_VARS} \
     --output-variable="ST_slices" \
     --nr-epochs="$nrEpochs" \
@@ -67,17 +67,17 @@ train_cae \
 
 # ---- Apply model to training data ----
 apply_cae ${trainPathsString} \
-    "/lustre_scratch/shaerdan/scores/train_scores_pB_$hash.nc" \
-    --model-folder="/lustre_scratch/shaerdan/models/model_pB_$hash" \
+    "/gws/nopw/j04/eocis_chuk/shaerdan/scores/train_scores_pB_$hash.nc" \
+    --model-folder="/gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_$hash" \
     --input-variables ${INPUT_VARS} \
     --prediction-variable="hires_estimate"
 
 # ---- Apply model to test data ----
 apply_cae ${testPathsString} \
-    "/lustre_scratch/shaerdan/scores/test_scores_pB_$hash.nc" \
-    --model-folder="/lustre_scratch/shaerdan/models/model_pB_$hash" \
+    "/gws/nopw/j04/eocis_chuk/shaerdan/scores/test_scores_pB_$hash.nc" \
+    --model-folder="/gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_$hash" \
     --input-variables ${INPUT_VARS} \
     --prediction-variable="hires_estimate"
 
 echo "Training complete!"
-echo "Model saved to: /lustre_scratch/shaerdan/models/model_pB_$hash"
+echo "Model saved to: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_$hash"
