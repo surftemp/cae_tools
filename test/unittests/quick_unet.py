@@ -17,31 +17,18 @@ import unittest
 import os.path
 import xarray as xr
 
-from cae_tools.models.linear_model import LinearModel
+from cae_tools.models.unet import UNET
 
 import test_specs
 
 data_root_folder = os.path.join(os.path.split(__file__)[0], "..", "data")
-results_root_folder = os.path.join(os.path.split(__file__)[0], "..", "results", "linear")
+results_root_folder = os.path.join(os.path.split(__file__)[0], "..", "results", "unet_quick")
 
 
-class LinearTest(unittest.TestCase):
-
-    valid_hyperparameters = {
-        "normalise_input", "normalise_output", "batch_size", "nr_epochs", "test_interval", "lr", "weight_decay", "use_gpu"
-    }
+class QuickUNETTest(unittest.TestCase):
 
     def test_circle(self):
         self.__run("circle")
-
-    def test_tidal(self):
-        self.__run("tidal_circle1")
-
-    def test_others(self):
-        for test_spec_name in test_specs.all_specs:
-            if test_spec_name not in ["tidal_circle1", "circle"]:
-                print("Running test:" + test_spec_name)
-                self.__run(test_spec_name)
 
     def __run(self, test_spec_name):
         test_spec = test_specs.all_specs[test_spec_name]
@@ -51,7 +38,6 @@ class LinearTest(unittest.TestCase):
         (i_h, i_w) = test_spec["input_size"]
         (o_h, o_w) = test_spec["output_size"]
         hyperparameters = test_spec.get("hyperparameters", {})
-        hyperparameters = {k: v for (k, v) in hyperparameters.items() if k in LinearTest.valid_hyperparameters}
 
         folder = os.path.join(data_root_folder, test_spec_name, f"{i_h}x{i_w}_{o_h}x{o_w}")
 
@@ -65,7 +51,8 @@ class LinearTest(unittest.TestCase):
         train_ds = xr.open_dataset(train_path)
         test_ds = xr.open_dataset(test_path)
 
-        mt = LinearModel(**hyperparameters)
+        # Use UNET with minimal epochs for quick test
+        mt = UNET(nr_epochs=10, batch_size=32, encoded_dim_size=32, fc_size=64)
         mt.train(input_variables, output_variable, train_ds, test_ds, 
                  training_paths=train_path, testing_paths=test_path)
         print(mt.summary())
@@ -79,7 +66,7 @@ class LinearTest(unittest.TestCase):
         mt.save(model_path)
 
         # Test loading
-        mt2 = LinearModel()
+        mt2 = UNET()
         mt2.load(model_path)
 
         # Test applying
