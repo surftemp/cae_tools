@@ -92,6 +92,7 @@ def main():
     print("Applying model for %d cases" % score_ds[case_dimension].shape[0])
 
     mt.apply(score_ds, input_variable_names, args.prediction_variable)
+    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
     score_ds.to_netcdf(args.output_path)
 
 
