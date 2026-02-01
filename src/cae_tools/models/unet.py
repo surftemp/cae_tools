@@ -423,8 +423,8 @@ class UNET(BaseModel):
         T_max=500
         scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
 
-        train_batches = train_loader
-        test_batches = test_loader
+        train_batches = [(low_res, high_res, labels) for low_res, high_res, labels in train_loader]
+        test_batches = [(low_res, high_res, labels) for low_res, high_res, labels in test_loader]
 
         try:
             for epoch in range(self.nr_epochs):
