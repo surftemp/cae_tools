@@ -1,0 +1,31 @@
+==========================================
+Job ID: 64520491
+Node: gpuhost[015-016]
+Start time: Sun  1 Feb 22:16:19 GMT 2026
+Working dir: /home/users/shaerdan/cae_tools_pB
+==========================================
+Sun Feb  1 22:16:19 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 590.48.01              Driver Version: 590.48.01      CUDA Version: 13.1     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-SXM4-40GB          On  |   00000000:4D:00.0 Off |                    0 |
+| N/A   32C    P0             60W /  400W |       0MiB /  40960MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+Total training files: 283
+Sampling 283 files (1 fraction)
+Training files selected: 283
+Output Hash: j5wOTJZ9
+Model will be saved to: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_j5wOTJZ9

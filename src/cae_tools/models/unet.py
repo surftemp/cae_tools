@@ -259,7 +259,7 @@ class UNET(BaseModel):
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         return gradient_penalty
     
-    def __train_epoch(self, batches, n_critic=5):
+    def __train_epoch(self, batches, device, n_critic=5):
         self.encoder.train()
         self.decoder.train()
 #         self.discriminator.train()
@@ -272,8 +272,8 @@ class UNET(BaseModel):
         train_d_loss = []
 
         for i, (low_res, high_res, labels) in enumerate(batches):
-#             valid = torch.ones((high_res.size(0), 1 ), requires_grad=False).to(low_res.device)
-#             fake = torch.zeros((high_res.size(0), 1 ), requires_grad=False).to(low_res.device)
+            low_res = low_res.to(device)
+            high_res = high_res.to(device)
 
             self.optim.zero_grad()
             encoded_data, skip = self.encoder(low_res)
@@ -306,7 +306,7 @@ class UNET(BaseModel):
         mean_d_loss = 0
         return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
 
-    def __test_epoch(self, batches, save_arr=None):
+    def __test_epoch(self, batches, device, save_arr=None):
         test_loss = []
         test_pearson_loss=[]
         test_bias_loss=[]
@@ -315,6 +315,8 @@ class UNET(BaseModel):
         with torch.no_grad():  # No need to track the gradients
             ctr = 0
             for (low_res, high_res, labels) in batches:
+                low_res = low_res.to(device)
+                high_res = high_res.to(device)
                 encoded_data, skip = self.encoder(low_res)
                 decoded_data = self.decoder(encoded_data, skip)
                 pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
@@ -421,16 +423,16 @@ class UNET(BaseModel):
         T_max=500
         scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
 
-        train_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in train_loader]
-        test_batches = [(low_res.to(device), high_res.to(device), labels) for low_res, high_res, labels in test_loader]
+        train_batches = train_loader
+        test_batches = test_loader
 
         try:
             for epoch in range(self.nr_epochs):
-                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches)
+                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches, device)
                 if epoch<T_max:
                     scheduler.step()
                 if epoch % self.test_interval == 0:
-                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches)
+                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches, device)
 #                     scheduler_D.step(test_loss)     
                     lr = self.get_lr(self.optim)
 #                     lr_D = self.get_lr(self.optim_D)                    

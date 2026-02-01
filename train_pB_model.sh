@@ -1,7 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Training script to reproduce pB model (bb8bb65f-7ccd-49d5-a9e0-c663abfbd068)
-# Original training date: 2025-02-25
+# Training script for pB model with DATA SAMPLING
 # Use with pB_stable branch of cae_tools
 # =============================================================================
 
@@ -16,22 +15,32 @@ fcSize=3200
 latentSize=800
 method="unet"
 
+# ---- Sampling configuration ----
+TRAIN_FRACTION=1  # 50% ≈ 141 files ≈ 47GB
+
 # ---- Paths ----
 layerDefinitionsPath="pB_spec.json"
 databasePath="database_pB_stable.db"
 
 # ---- Data folders ----
-trainFolder="/gws/nopw/j04/eocis_chuk/shaerdan/train_v4/train/processed_train/"
-testFolder="/gws/nopw/j04/eocis_chuk/shaerdan/test_v4/test/processed_test/"
+trainFolder="/gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/train/"
+testFolder="/gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/test/"
 
-# ---- Collect training files ----
-trainPaths=()
-for file in ${trainFolder}*.nc; do
-    trainPaths+=("$file")
-done
+# ---- Collect training files with sampling ----
+allTrainFiles=(${trainFolder}*.nc)
+totalFiles=${#allTrainFiles[@]}
+sampleSize=$(printf "%.0f" $(echo "$totalFiles * $TRAIN_FRACTION" | bc))
+
+echo "Total training files: $totalFiles"
+echo "Sampling $sampleSize files (${TRAIN_FRACTION} fraction)"
+
+# Shuffle with fixed seed for reproducibility, then take sample
+mapfile -t trainPaths < <(printf '%s\n' "${allTrainFiles[@]}" | shuf --random-source=<(yes 42) -n $sampleSize)
 trainPathsString="${trainPaths[@]}"
 
-# ---- Collect test files ----
+echo "Training files selected: ${#trainPaths[@]}"
+
+# ---- Collect test files (use all) ----
 testPaths=()
 for file in ${testFolder}*.nc; do
     testPaths+=("$file")
@@ -43,7 +52,7 @@ hash=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1)
 echo "Output Hash: $hash"
 echo "Model will be saved to: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_$hash"
 
-# ---- Input variables (12 channels - exact match to pB model) ----
+# ---- Input variables (12 channels) ----
 INPUT_VARS="land_cover albedo_monthly_climatology_means elevation era5_skt sin_doy cos_doy slope_magnitude slope_direction urban_area suburban_area pixel_st_hot_pattern pixel_st_cold_pattern"
 
 # ---- Train the model ----

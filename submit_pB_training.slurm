@@ -1,8 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=pB_unet_train
-#SBATCH --exclude=gpuhost004,gpuhost007,gpuhost012,gpuhost016
+#SBATCH --exclude=gpuhost004,gpuhost007,gpuhost012
 #SBATCH --time=24:00:00
-#SBATCH --mem=128G
+#SBATCH --mem=512G
+#SBATCH --nodelist=gpuhost015,gpuhost016
 #SBATCH --partition=orchid
 #SBATCH --account=orchid
 #SBATCH --qos=orchid
