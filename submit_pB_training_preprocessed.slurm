@@ -2,7 +2,7 @@
 #SBATCH --job-name=pB_train_prep
 #SBATCH --exclude=gpuhost004,gpuhost007,gpuhost012,gpuhost016
 #SBATCH --time=24:00:00
-#SBATCH --mem=96G
+#SBATCH --mem=128G
 #SBATCH --partition=orchid
 #SBATCH --account=orchid
 #SBATCH --qos=orchid

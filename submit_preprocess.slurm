@@ -1,8 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess_v8
 #SBATCH --time=04:00:00
-#SBATCH --mem=96G
-#SBATCH --partition=short-serial
+#SBATCH --mem=128G
+#SBATCH --account=eocis_chuk
+#SBATCH --partition=standard
+#SBATCH --qos=standard
 #SBATCH --cpus-per-task=1
 #SBATCH --chdir=/home/users/shaerdan/cae_tools_pB
 #SBATCH -o /home/users/shaerdan/cae_tools_pB/logs/preprocess_%j.out
