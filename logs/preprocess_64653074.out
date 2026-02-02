@@ -1,10 +1,11 @@
 ==========================================
-Job ID: 64527117
-Node: host1205
-Start time: Mon  2 Feb 00:25:24 GMT 2026
+Job ID: 64653074
+Node: host1252
+Start time: Mon  2 Feb 15:41:50 GMT 2026
 ==========================================
 
-Preprocessing training data...
+Step 1: Preprocessing training data...
+       (Computing normalisation parameters from training data)
 Found 283 netCDF files
 Case dimension: box
 Spatial dimensions: 100 x 100
@@ -49,7 +50,10 @@ Saving to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt...
 Done! Output file size: 53.86 GB
 Samples: 103577
 
-Preprocessing test data...
+NOTE: This file's normalisation_parameters should be used for test/validation data
+
+Step 2: Preprocessing test data...
+       (Using normalisation parameters from train_v8.pt)
 Found 202 netCDF files
 Case dimension: box
 Spatial dimensions: 100 x 100
@@ -71,7 +75,22 @@ Loading data...
   Processed 180/202 files (7064/9001 boxes)
   Processed 200/202 files (8899/9001 boxes)
   Processed 202/202 files (9001/9001 boxes)
-Computing normalization statistics...
+Loading normalisation parameters from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt...
+Using external normalisation parameters:
+  land_cover: [0.0000, 21.0000]
+  albedo_monthly_climatology_means: [-0.0128, 3.0675]
+  elevation: [-45.0426, 1263.7565]
+  era5_skt: [269.3254, 312.9688]
+  sin_doy: [0.0257, 1.0000]
+  cos_doy: [-1.0000, 0.9987]
+  slope_magnitude: [0.0000, 1.9282]
+  slope_direction: [-180.0000, 180.0000]
+  urban_area: [0.0000, 1.0000]
+  suburban_area: [0.0000, 1.0000]
+  pixel_st_hot_pattern: [272.7443, 341.2346]
+  pixel_st_cold_pattern: [251.3834, 309.9614]
+  ST_slices: [250.2623, 368.8778]
+This dataset's actual ranges (for reference):
   land_cover: [0.0000, 21.0000]
   albedo_monthly_climatology_means: [0.0145, 2.8215]
   elevation: [-28.5000, 1167.9639]
@@ -90,10 +109,15 @@ Saving to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8.pt...
 Done! Output file size: 4.68 GB
 Samples: 9001
 
+NOTE: Data normalized using parameters from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt
+
 ==========================================
 Preprocessing complete!
+
 Output files:
--rw-rw-r-- 1 shaerdan gws_eocis_chuk 4.4G Feb  2 00:40 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8.pt
--rw-rw-r-- 1 shaerdan gws_eocis_chuk  51G Feb  2 00:37 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt
-End time: Mon  2 Feb 00:40:36 GMT 2026
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk 4.4G Feb  2 16:04 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk  51G Feb  2 15:58 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt
+
+IMPORTANT: All files are normalized using TRAINING data statistics.
+End time: Mon  2 Feb 16:04:57 GMT 2026
 ==========================================

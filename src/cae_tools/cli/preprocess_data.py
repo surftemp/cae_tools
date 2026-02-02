@@ -19,14 +19,21 @@ Preprocess netCDF training data into efficient .pt format.
 This script:
 1. Reads netCDF files one at a time (low memory)
 2. Extracts only the needed input/output variables
-3. Computes normalization statistics
+3. Computes normalization statistics (or uses external ones)
 4. Saves normalized tensors to a single .pt file
 
-Usage:
+Usage (training data - computes its own stats):
     preprocess_data --input-files /path/to/train/*.nc \
                     --output-file train_preprocessed.pt \
                     --input-variables land_cover albedo elevation ... \
                     --output-variable ST_slices
+
+Usage (test data - uses train stats):
+    preprocess_data --input-files /path/to/test/*.nc \
+                    --output-file test_preprocessed.pt \
+                    --input-variables land_cover albedo elevation ... \
+                    --output-variable ST_slices \
+                    --use-norm-from train_preprocessed.pt
 """
 
 import argparse
@@ -76,6 +83,8 @@ def main():
                         help='Name of output variable')
     parser.add_argument('--no-normalize', action='store_true',
                         help='Skip normalization (save raw values)')
+    parser.add_argument('--use-norm-from', type=str, default=None,
+                        help='Path to .pt file to load normalisation parameters from (use for test/val data)')
     
     args = parser.parse_args()
     
@@ -153,24 +162,45 @@ def main():
         if (i + 1) % 20 == 0 or (i + 1) == len(files):
             print(f"  Processed {i+1}/{len(files)} files ({idx}/{total_boxes} boxes)")
     
-    # Compute normalization statistics
-    print("Computing normalization statistics...")
-    normalisation_parameters = {
-        'min_inputs': {},
-        'max_inputs': {},
-        'min_output': None,
-        'max_output': None,
-    }
-    
-    for var_idx, var_name in enumerate(args.input_variables):
-        var_data = inputs[:, var_idx, :, :]
-        normalisation_parameters['min_inputs'][var_name] = float(var_data.min())
-        normalisation_parameters['max_inputs'][var_name] = float(var_data.max())
-        print(f"  {var_name}: [{var_data.min():.4f}, {var_data.max():.4f}]")
-    
-    normalisation_parameters['min_output'] = float(outputs.min())
-    normalisation_parameters['max_output'] = float(outputs.max())
-    print(f"  {args.output_variable}: [{outputs.min():.4f}, {outputs.max():.4f}]")
+    # Load or compute normalization parameters
+    if args.use_norm_from:
+        # Load normalisation parameters from external .pt file (e.g., training data)
+        print(f"Loading normalisation parameters from {args.use_norm_from}...")
+        external_data = torch.load(args.use_norm_from, map_location='cpu')
+        normalisation_parameters = external_data['normalisation_parameters']
+        
+        print("Using external normalisation parameters:")
+        for var_name in args.input_variables:
+            min_val = normalisation_parameters['min_inputs'][var_name]
+            max_val = normalisation_parameters['max_inputs'][var_name]
+            print(f"  {var_name}: [{min_val:.4f}, {max_val:.4f}]")
+        print(f"  {args.output_variable}: [{normalisation_parameters['min_output']:.4f}, {normalisation_parameters['max_output']:.4f}]")
+        
+        # Also report this dataset's actual min/max for comparison
+        print("This dataset's actual ranges (for reference):")
+        for var_idx, var_name in enumerate(args.input_variables):
+            var_data = inputs[:, var_idx, :, :]
+            print(f"  {var_name}: [{var_data.min():.4f}, {var_data.max():.4f}]")
+        print(f"  {args.output_variable}: [{outputs.min():.4f}, {outputs.max():.4f}]")
+    else:
+        # Compute normalization statistics from this dataset
+        print("Computing normalization statistics...")
+        normalisation_parameters = {
+            'min_inputs': {},
+            'max_inputs': {},
+            'min_output': None,
+            'max_output': None,
+        }
+        
+        for var_idx, var_name in enumerate(args.input_variables):
+            var_data = inputs[:, var_idx, :, :]
+            normalisation_parameters['min_inputs'][var_name] = float(var_data.min())
+            normalisation_parameters['max_inputs'][var_name] = float(var_data.max())
+            print(f"  {var_name}: [{var_data.min():.4f}, {var_data.max():.4f}]")
+        
+        normalisation_parameters['min_output'] = float(outputs.min())
+        normalisation_parameters['max_output'] = float(outputs.max())
+        print(f"  {args.output_variable}: [{outputs.min():.4f}, {outputs.max():.4f}]")
     
     # Normalize data (in-place to save memory)
     if not args.no_normalize:
@@ -207,6 +237,11 @@ def main():
     file_size = os.path.getsize(args.output_file) / 1e9
     print(f"Done! Output file size: {file_size:.2f} GB")
     print(f"Samples: {total_boxes}")
+    
+    if args.use_norm_from:
+        print(f"\nNOTE: Data normalized using parameters from {args.use_norm_from}")
+    else:
+        print(f"\nNOTE: This file's normalisation_parameters should be used for test/validation data")
 
 
 if __name__ == '__main__':
