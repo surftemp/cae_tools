@@ -309,67 +309,6 @@ class UNET(BaseModel):
         mean_d_loss = 0
         return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
 
-    def __train_epoch_from_loader(self, data_loader, device, n_critic=5):
-        """Train epoch iterating DataLoader directly (no batch preloading)."""
-        self.encoder.train()
-        self.decoder.train()
-        lambda_l1 = self.lambda_l1
-        lambda_pearson = self.lambda_pearson
-        train_loss = []
-        train_pearson_loss = []
-
-        for i, (low_res, high_res, labels) in enumerate(data_loader):
-            low_res = low_res.to(device)
-            high_res = high_res.to(device)
-
-            self.optim.zero_grad()
-            encoded_data, skip = self.encoder(low_res)
-            decoded_data = self.decoder(encoded_data, skip)
-
-            mse_loss = self.loss_fn(decoded_data, high_res)
-            pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
-            pearson_loss = 1 - torch.mean(pearson_corr)
-
-            combined_loss = mse_loss + lambda_pearson * pearson_loss
-            combined_loss.backward()
-            self.optim.step()
-            train_loss.append(mse_loss.item())
-            train_pearson_loss.append(pearson_loss.item())
-
-        mean_loss = np.mean(train_loss)
-        mean_pearson_loss = np.mean(train_pearson_loss)
-        mean_bias_loss = 0
-        mean_d_loss = 0
-        return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
-
-    def __test_epoch_from_loader(self, data_loader, device, save_arr=None):
-        """Test epoch iterating DataLoader directly (no batch preloading)."""
-        test_loss = []
-        test_pearson_loss = []
-        self.encoder.eval()
-        self.decoder.eval()
-        with torch.no_grad():
-            ctr = 0
-            for (low_res, high_res, labels) in data_loader:
-                low_res = low_res.to(device)
-                high_res = high_res.to(device)
-                encoded_data, skip = self.encoder(low_res)
-                decoded_data = self.decoder(encoded_data, skip)
-                pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
-                pearson_loss = 1 - torch.mean(pearson_corr)
-                test_pearson_loss.append(pearson_loss.detach().cpu().numpy())
-
-                loss = self.loss_fn(decoded_data, high_res)
-                test_loss.append(loss.detach().cpu().numpy())
-                if save_arr is not None:
-                    save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
-                ctr += self.batch_size
-
-        mean_loss = np.mean(test_loss)
-        mean_pearson_loss = np.mean(test_pearson_loss)
-        mean_bias_loss = 0
-        return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss)
-
     def __test_epoch(self, batches, device, save_arr=None):
         test_loss = []
         test_pearson_loss=[]
@@ -602,16 +541,17 @@ class UNET(BaseModel):
         T_max = 500
         scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
 
-        # No batch preloading needed - PreprocessedDataset.__getitem__ is fast (just tensor slicing)
-        # DataLoader iterates directly over the in-memory tensors
+        # Keep batches on CPU, move to GPU per-batch to avoid VRAM OOM
+        train_batches = [(low_res, high_res, labels) for low_res, high_res, labels in train_loader]
+        test_batches = [(low_res, high_res, labels) for low_res, high_res, labels in test_loader]
 
         try:
             for epoch in range(self.nr_epochs):
-                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
+                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches, device)
                 if epoch < T_max:
                     scheduler.step()
                 if epoch % self.test_interval == 0:
-                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_from_loader(test_loader, device)
+                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches, device)
                     lr = self.get_lr(self.optim)
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
