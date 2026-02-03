@@ -11,11 +11,14 @@
 #SBATCH --chdir=/home/users/shaerdan/cae_tools_pB
 #SBATCH -o /home/users/shaerdan/cae_tools_pB/logs/logs_pB_train_%j.out
 #SBATCH -e /home/users/shaerdan/cae_tools_pB/logs/logs_pB_train_%j.err
+#SBATCH --export=ALL
 
 # ============================================================================
 # pB Model Training using PREPROCESSED data
-# Requires: submit_preprocess.slurm to have been run first
-# Memory: ~60GB (vs 250GB for netCDF mode)
+# 
+# Usage:
+#   Fresh training:      sbatch submit_pB_training_preprocessed.slurm
+#   Continue training:   CONTINUE_MODEL=model_pB_XXXXXXXX sbatch submit_pB_training_preprocessed.slurm
 # ============================================================================
 
 source ~/miniforge3/bin/activate
@@ -28,6 +31,9 @@ echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURM_NODELIST"
 echo "Start time: $(date)"
 echo "Working dir: $(pwd)"
+if [ -n "$CONTINUE_MODEL" ]; then
+    echo "CONTINUE_MODEL: $CONTINUE_MODEL"
+fi
 echo "=========================================="
 
 nvidia-smi

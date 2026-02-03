@@ -55,6 +55,7 @@ def main():
     parser.add_argument("--model-id", type=str, help="specify the model id when creating a model", default=None)
     parser.add_argument("--database-path", type=str, help="path to a database to store evaluation results", default=None)
     parser.add_argument("--chunk-size", type=int, help="chunk size for xarray", default=1000)
+    parser.add_argument("--checkpoint-interval", type=int, help="save checkpoint every N epochs (default: no checkpoints)", default=None)
 
     args = parser.parse_args()
 
@@ -89,12 +90,14 @@ def main():
             mt.nr_epochs = args.nr_epochs
             mt.lr = args.learning_rate
             mt.batch_size = args.batch_size
+            mt.checkpoint_interval = args.checkpoint_interval
         else:
             if args.method == "unet":
                 mt = UNET(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                           batch_size=args.batch_size, lr=args.learning_rate, lambda_l1=args.lambda_l1,
                           lambda_pearson=args.lambda_pearson, database_path=args.database_path,
-                          weight_decay=args.weight_decay, dropout_rate=args.dropout_rate)
+                          weight_decay=args.weight_decay, dropout_rate=args.dropout_rate,
+                          checkpoint_interval=args.checkpoint_interval)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -181,12 +184,14 @@ def main():
         mt.nr_epochs = args.nr_epochs
         mt.lr = args.learning_rate
         mt.batch_size = args.batch_size
+        mt.checkpoint_interval = args.checkpoint_interval
     else:
         if args.method == "unet":
             mt = UNET(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
                       batch_size=args.batch_size, lr=args.learning_rate, lambda_l1=args.lambda_l1,
                       lambda_pearson=args.lambda_pearson, database_path=args.database_path,
-                      weight_decay=args.weight_decay, dropout_rate=args.dropout_rate)
+                      weight_decay=args.weight_decay, dropout_rate=args.dropout_rate,
+                      checkpoint_interval=args.checkpoint_interval)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

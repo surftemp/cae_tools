@@ -168,7 +168,8 @@ class UNET(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, dropout_rate=0.1, use_gpu=True, conv_kernel_size=3, conv_stride=2,
-                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1):
+                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1,
+                 checkpoint_interval=None):
         """
         Create a convolutional autoencoder general model
 
@@ -187,6 +188,7 @@ class UNET(BaseModel):
         :param conv_input_layer_count: number of input convolutional layers to use
         :param conv_output_layer_count: number of output convolutional layers to use
         :param database_path: path to optional tracking database
+        :param checkpoint_interval: save checkpoint every N epochs (None to disable)
         """
         super().__init__()
         self.normalise_input = normalise_input
@@ -215,6 +217,7 @@ class UNET(BaseModel):
         self.db = ModelDatabase(database_path) if database_path else None
         self.lambda_l1 = lambda_l1
         self.lambda_pearson = lambda_pearson
+        self.checkpoint_interval = checkpoint_interval
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
         self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
@@ -512,9 +515,28 @@ class UNET(BaseModel):
 #                 if test_loss < 0.000510:
 #                     print(f"Early stopping as Test MSE reached {test_loss:.6f}, below 0.000510.")
 #                     break    
+
+                # Save checkpoint every N epochs
+                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
+                    # Temporarily update nr_epochs to reflect actual progress
+                    original_nr_epochs = self.history['nr_epochs']
+                    self.history['nr_epochs'] = original_nr_epochs + epoch + 1
+                    
+                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                    print(f"Saving checkpoint to {checkpoint_path}...")
+                    self.save(checkpoint_path)
+                    
+                    # Restore for continued training
+                    self.history['nr_epochs'] = original_nr_epochs
                     
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
+            # Save emergency checkpoint on interrupt
+            if model_path:
+                emergency_path = os.path.join(model_path, "checkpoint_interrupted")
+                print(f"Saving emergency checkpoint to {emergency_path}...")
+                self.history['nr_epochs'] += epoch + 1
+                self.save(emergency_path)
         finally:
             end = time.time()
             elapsed = end - start
@@ -617,9 +639,28 @@ class UNET(BaseModel):
                     self.history["test_loss"].append(test_loss)
                     print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
                     print(f"learn rate: {lr:.6f}")
+                
+                # Save checkpoint every N epochs
+                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
+                    # Temporarily update nr_epochs to reflect actual progress
+                    original_nr_epochs = self.history['nr_epochs']
+                    self.history['nr_epochs'] = original_nr_epochs + epoch + 1
+                    
+                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                    print(f"Saving checkpoint to {checkpoint_path}...")
+                    self.save(checkpoint_path)
+                    
+                    # Restore for continued training
+                    self.history['nr_epochs'] = original_nr_epochs
 
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
+            # Save emergency checkpoint on interrupt
+            if model_path:
+                emergency_path = os.path.join(model_path, "checkpoint_interrupted")
+                print(f"Saving emergency checkpoint to {emergency_path}...")
+                self.history['nr_epochs'] += epoch + 1
+                self.save(emergency_path)
         finally:
             end = time.time()
             elapsed = end - start
