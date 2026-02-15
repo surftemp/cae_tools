@@ -488,8 +488,34 @@ class UNET(BaseModel):
 #         self.discriminator.to(device)
 
         self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
+        
+        # Restore optimizer state if available (for training continuation)
+        if hasattr(self, '_saved_optimizer_state_path') and self._saved_optimizer_state_path:
+            print(f"Restoring optimizer state from {self._saved_optimizer_state_path}...")
+            optimizer_state = torch.load(self._saved_optimizer_state_path, map_location=device)
+            self.optim.load_state_dict(optimizer_state)
+            self._saved_optimizer_state_path = None
+        
         T_max=500
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
+        self._scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
+        
+        # Restore scheduler state if available (for training continuation)
+        if hasattr(self, '_saved_scheduler_state_path') and self._saved_scheduler_state_path:
+            print(f"Restoring scheduler state from {self._saved_scheduler_state_path}...")
+            scheduler_state = torch.load(self._saved_scheduler_state_path, map_location=device)
+            self._scheduler.load_state_dict(scheduler_state)
+            self._saved_scheduler_state_path = None
+        
+        # Determine root model path for checkpoints (avoid nesting inside checkpoint folders)
+        if hasattr(self, '_loaded_from_folder') and self._loaded_from_folder:
+            loaded_path = self._loaded_from_folder
+            if 'checkpoint_' in os.path.basename(loaded_path):
+                root_model_path = os.path.dirname(loaded_path)
+                print(f"Detected checkpoint continuation, saving new checkpoints to parent: {root_model_path}")
+            else:
+                root_model_path = model_path
+        else:
+            root_model_path = model_path
 
         # Keep batches on CPU, move to GPU per-batch to avoid VRAM OOM
         train_batches = [(low_res, high_res, labels) for low_res, high_res, labels in train_loader]
@@ -499,7 +525,7 @@ class UNET(BaseModel):
             for epoch in range(self.nr_epochs):
                 train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches, device)
                 if epoch<T_max:
-                    scheduler.step()
+                    self._scheduler.step()
                 if epoch % self.test_interval == 0:
                     test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches, device)
 #                     scheduler_D.step(test_loss)     
@@ -517,12 +543,12 @@ class UNET(BaseModel):
 #                     break    
 
                 # Save checkpoint every N epochs
-                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
+                if self.checkpoint_interval and root_model_path and (epoch + 1) % self.checkpoint_interval == 0:
                     # Temporarily update nr_epochs to reflect actual progress
                     original_nr_epochs = self.history['nr_epochs']
                     self.history['nr_epochs'] = original_nr_epochs + epoch + 1
                     
-                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                    checkpoint_path = os.path.join(root_model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
                     
@@ -532,8 +558,8 @@ class UNET(BaseModel):
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
             # Save emergency checkpoint on interrupt
-            if model_path:
-                emergency_path = os.path.join(model_path, "checkpoint_interrupted")
+            if root_model_path:
+                emergency_path = os.path.join(root_model_path, "checkpoint_interrupted")
                 print(f"Saving emergency checkpoint to {emergency_path}...")
                 self.history['nr_epochs'] += epoch + 1
                 self.save(emergency_path)
@@ -621,8 +647,37 @@ class UNET(BaseModel):
         self.decoder.to(device)
 
         self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
+        
+        # Restore optimizer state if available (for training continuation)
+        if hasattr(self, '_saved_optimizer_state_path') and self._saved_optimizer_state_path:
+            print(f"Restoring optimizer state from {self._saved_optimizer_state_path}...")
+            optimizer_state = torch.load(self._saved_optimizer_state_path, map_location=device)
+            self.optim.load_state_dict(optimizer_state)
+            # Clear the path so we don't reload on next training call
+            self._saved_optimizer_state_path = None
+        
         T_max = 500
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
+        self._scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
+        
+        # Restore scheduler state if available (for training continuation)
+        if hasattr(self, '_saved_scheduler_state_path') and self._saved_scheduler_state_path:
+            print(f"Restoring scheduler state from {self._saved_scheduler_state_path}...")
+            scheduler_state = torch.load(self._saved_scheduler_state_path, map_location=device)
+            self._scheduler.load_state_dict(scheduler_state)
+            self._saved_scheduler_state_path = None
+        
+        # Determine root model path for checkpoints (avoid nesting inside checkpoint folders)
+        if hasattr(self, '_loaded_from_folder') and self._loaded_from_folder:
+            # If loaded from a checkpoint, find the parent model folder
+            loaded_path = self._loaded_from_folder
+            if 'checkpoint_' in os.path.basename(loaded_path):
+                # This is a checkpoint folder, use its parent
+                root_model_path = os.path.dirname(loaded_path)
+                print(f"Detected checkpoint continuation, saving new checkpoints to parent: {root_model_path}")
+            else:
+                root_model_path = model_path
+        else:
+            root_model_path = model_path
 
         # No batch preloading needed - PreprocessedDataset.__getitem__ is fast (just tensor slicing)
         # DataLoader iterates directly over the in-memory tensors
@@ -631,7 +686,7 @@ class UNET(BaseModel):
             for epoch in range(self.nr_epochs):
                 train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
                 if epoch < T_max:
-                    scheduler.step()
+                    self._scheduler.step()
                 if epoch % self.test_interval == 0:
                     test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_from_loader(test_loader, device)
                     lr = self.get_lr(self.optim)
@@ -641,12 +696,12 @@ class UNET(BaseModel):
                     print(f"learn rate: {lr:.6f}")
                 
                 # Save checkpoint every N epochs
-                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
+                if self.checkpoint_interval and root_model_path and (epoch + 1) % self.checkpoint_interval == 0:
                     # Temporarily update nr_epochs to reflect actual progress
                     original_nr_epochs = self.history['nr_epochs']
                     self.history['nr_epochs'] = original_nr_epochs + epoch + 1
                     
-                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                    checkpoint_path = os.path.join(root_model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
                     
@@ -656,8 +711,8 @@ class UNET(BaseModel):
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
             # Save emergency checkpoint on interrupt
-            if model_path:
-                emergency_path = os.path.join(model_path, "checkpoint_interrupted")
+            if root_model_path:
+                emergency_path = os.path.join(root_model_path, "checkpoint_interrupted")
                 print(f"Saving emergency checkpoint to {emergency_path}...")
                 self.history['nr_epochs'] += epoch + 1
                 self.save(emergency_path)
@@ -724,6 +779,16 @@ class UNET(BaseModel):
         normalisation_path = os.path.join(to_folder, "normalisation.weights")
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
+
+        # Save optimizer state for proper training continuation
+        if self.optim is not None:
+            optimizer_path = os.path.join(to_folder, "optimizer.state")
+            torch.save(self.optim.state_dict(), optimizer_path)
+        
+        # Save scheduler state if available
+        if hasattr(self, '_scheduler') and self._scheduler is not None:
+            scheduler_path = os.path.join(to_folder, "scheduler.state")
+            torch.save(self._scheduler.state_dict(), scheduler_path)
 
         parameters = self.get_parameters()
 
@@ -794,6 +859,27 @@ class UNET(BaseModel):
 #         self.decoder.load_state_dict(torch.load(decoder_path))
         self.decoder.load_state_dict(self.torch_load(decoder_path))
         self.decoder.eval()
+        
+        # Store optimizer state path for restoration during training continuation
+        optimizer_path = os.path.join(from_folder, "optimizer.state")
+        if os.path.exists(optimizer_path):
+            self._saved_optimizer_state_path = optimizer_path
+            print(f"Found saved optimizer state at {optimizer_path}")
+        else:
+            self._saved_optimizer_state_path = None
+            print("No saved optimizer state found (optimizer will start fresh)")
+        
+        # Store scheduler state path for restoration during training continuation
+        scheduler_path = os.path.join(from_folder, "scheduler.state")
+        if os.path.exists(scheduler_path):
+            self._saved_scheduler_state_path = scheduler_path
+            print(f"Found saved scheduler state at {scheduler_path}")
+        else:
+            self._saved_scheduler_state_path = None
+        
+        # Store the loaded model folder path to determine root model path for checkpoints
+        self._loaded_from_folder = from_folder
+        
         super().load(from_folder)
 
     def pearson_corr_torch(self, decoded_data, high_res):

@@ -77,7 +77,13 @@ class DSDataset(torch.utils.data.Dataset):
         return [self.min_inputs, self.max_inputs, self.min_output, self.max_output]
 
     def set_normalisation_parameters(self, parameters):
-        (self.min_inputs, self.max_inputs, self.min_output, self.max_output) = tuple(parameters)
+        if isinstance(parameters, dict):
+            self.min_inputs = parameters['min_inputs']
+            self.max_inputs = parameters['max_inputs']
+            self.min_output = parameters['min_output']
+            self.max_output = parameters['max_output']
+        else:
+            (self.min_inputs, self.max_inputs, self.min_output, self.max_output) = tuple(parameters)
         print(self.min_inputs, self.max_inputs, self.min_output, self.max_output)
 
     def get_input_shape(self):
