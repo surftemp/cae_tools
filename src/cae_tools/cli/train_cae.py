@@ -56,6 +56,10 @@ def main():
     parser.add_argument("--database-path", type=str, help="path to a database to store evaluation results", default=None)
     parser.add_argument("--chunk-size", type=int, help="chunk size for xarray", default=1000)
     parser.add_argument("--checkpoint-interval", type=int, help="save checkpoint every N epochs (default: no checkpoints)", default=None)
+    parser.add_argument("--bottleneck-type", type=str, choices=["fc", "conv"], default="fc",
+                        help="bottleneck type: 'fc' for FC bottleneck (default), 'conv' for fully convolutional UNET")
+    parser.add_argument("--no-attention", action="store_true", default=False,
+                        help="disable channel attention on skip connections")
 
     args = parser.parse_args()
 
@@ -97,7 +101,8 @@ def main():
                           batch_size=args.batch_size, lr=args.learning_rate, lambda_l1=args.lambda_l1,
                           lambda_pearson=args.lambda_pearson, database_path=args.database_path,
                           weight_decay=args.weight_decay, dropout_rate=args.dropout_rate,
-                          checkpoint_interval=args.checkpoint_interval)
+                          checkpoint_interval=args.checkpoint_interval, bottleneck_type=args.bottleneck_type,
+                          use_attention=not args.no_attention)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -191,7 +196,8 @@ def main():
                       batch_size=args.batch_size, lr=args.learning_rate, lambda_l1=args.lambda_l1,
                       lambda_pearson=args.lambda_pearson, database_path=args.database_path,
                       weight_decay=args.weight_decay, dropout_rate=args.dropout_rate,
-                      checkpoint_interval=args.checkpoint_interval)
+                      checkpoint_interval=args.checkpoint_interval, bottleneck_type=args.bottleneck_type,
+                      use_attention=not args.no_attention)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

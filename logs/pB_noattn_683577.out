@@ -1,0 +1,333 @@
+==========================================
+Job ID: 683577
+Node: gpuhost003
+Start time: Mon 16 Feb 02:04:13 GMT 2026
+Working dir: /home/users/shaerdan/cae_tools_pB
+==========================================
+Mon Feb 16 02:04:13 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 590.48.01              Driver Version: 590.48.01      CUDA Version: 13.1     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-SXM4-40GB          On  |   00000000:81:00.0 Off |                    0 |
+| N/A   29C    P0             56W /  400W |       0MiB /  40960MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+==========================================
+Experiment: FC BOTTLENECK, NO ATTENTION
+Model: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_noattn_3CzljY0c
+Epochs: 3500
+==========================================
+Loading preprocessed data...
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt...
+Loaded 103577 samples
+Input shape: torch.Size([103577, 12, 100, 100])
+Output shape: torch.Size([103577, 1, 100, 100])
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8.pt...
+Loaded 9001 samples
+Input shape: torch.Size([9001, 12, 100, 100])
+Output shape: torch.Size([9001, 1, 100, 100])
+Training cases: 103577, Test cases: 9001
+Input shape: (12, 100, 100), Output shape: (1, 100, 100)
+Running on device: cuda
+epoch: 0, train_mse: 0.015376, train_pearson_loss: 0.9381, test_mse: 0.002458, test_pearson_loss: 0.8624
+learn rate: 0.001000
+epoch: 10, train_mse: 0.000734, train_pearson_loss: 0.5105, test_mse: 0.001008, test_pearson_loss: 0.4530
+learn rate: 0.001000
+epoch: 20, train_mse: 0.000567, train_pearson_loss: 0.4468, test_mse: 0.001025, test_pearson_loss: 0.4285
+learn rate: 0.001000
+epoch: 30, train_mse: 0.000507, train_pearson_loss: 0.4161, test_mse: 0.000988, test_pearson_loss: 0.4098
+learn rate: 0.001000
+epoch: 40, train_mse: 0.000461, train_pearson_loss: 0.4019, test_mse: 0.000962, test_pearson_loss: 0.3953
+learn rate: 0.001000
+epoch: 50, train_mse: 0.000438, train_pearson_loss: 0.3968, test_mse: 0.000870, test_pearson_loss: 0.3896
+learn rate: 0.001000
+epoch: 60, train_mse: 0.000411, train_pearson_loss: 0.3899, test_mse: 0.000951, test_pearson_loss: 0.3875
+learn rate: 0.001000
+epoch: 70, train_mse: 0.000381, train_pearson_loss: 0.3834, test_mse: 0.000957, test_pearson_loss: 0.3830
+learn rate: 0.001000
+epoch: 80, train_mse: 0.000360, train_pearson_loss: 0.3801, test_mse: 0.000905, test_pearson_loss: 0.3842
+learn rate: 0.001000
+epoch: 90, train_mse: 0.000334, train_pearson_loss: 0.3746, test_mse: 0.000999, test_pearson_loss: 0.3784
+learn rate: 0.001000
+epoch: 100, train_mse: 0.000320, train_pearson_loss: 0.3716, test_mse: 0.000994, test_pearson_loss: 0.3779
+learn rate: 0.001000
+epoch: 110, train_mse: 0.000306, train_pearson_loss: 0.3701, test_mse: 0.000907, test_pearson_loss: 0.3722
+learn rate: 0.001000
+epoch: 120, train_mse: 0.000298, train_pearson_loss: 0.3675, test_mse: 0.000937, test_pearson_loss: 0.3679
+learn rate: 0.001000
+epoch: 130, train_mse: 0.000284, train_pearson_loss: 0.3641, test_mse: 0.000928, test_pearson_loss: 0.3686
+learn rate: 0.001000
+epoch: 140, train_mse: 0.000280, train_pearson_loss: 0.3610, test_mse: 0.000933, test_pearson_loss: 0.3668
+learn rate: 0.001000
+epoch: 150, train_mse: 0.000280, train_pearson_loss: 0.3589, test_mse: 0.001028, test_pearson_loss: 0.3827
+learn rate: 0.001000
+epoch: 160, train_mse: 0.000267, train_pearson_loss: 0.3543, test_mse: 0.000938, test_pearson_loss: 0.3729
+learn rate: 0.001000
+epoch: 170, train_mse: 0.000253, train_pearson_loss: 0.3460, test_mse: 0.000905, test_pearson_loss: 0.3675
+learn rate: 0.001000
+epoch: 180, train_mse: 0.000248, train_pearson_loss: 0.3416, test_mse: 0.000963, test_pearson_loss: 0.3674
+learn rate: 0.001000
+epoch: 190, train_mse: 0.000357, train_pearson_loss: 0.4019, test_mse: 0.000943, test_pearson_loss: 0.3907
+learn rate: 0.001000
+epoch: 200, train_mse: 0.000250, train_pearson_loss: 0.3444, test_mse: 0.000914, test_pearson_loss: 0.3697
+learn rate: 0.001000
+epoch: 210, train_mse: 0.000244, train_pearson_loss: 0.3360, test_mse: 0.000878, test_pearson_loss: 0.3654
+learn rate: 0.001000
+epoch: 220, train_mse: 0.000236, train_pearson_loss: 0.3305, test_mse: 0.000932, test_pearson_loss: 0.3629
+learn rate: 0.001000
+epoch: 230, train_mse: 0.000233, train_pearson_loss: 0.3283, test_mse: 0.000899, test_pearson_loss: 0.3636
+learn rate: 0.001000
+epoch: 240, train_mse: 0.000234, train_pearson_loss: 0.3259, test_mse: 0.000940, test_pearson_loss: 0.3669
+learn rate: 0.001000
+epoch: 250, train_mse: 0.000229, train_pearson_loss: 0.3220, test_mse: 0.000906, test_pearson_loss: 0.3667
+learn rate: 0.001000
+epoch: 260, train_mse: 0.000226, train_pearson_loss: 0.3196, test_mse: 0.000895, test_pearson_loss: 0.3635
+learn rate: 0.001000
+epoch: 270, train_mse: 0.000225, train_pearson_loss: 0.3176, test_mse: 0.000875, test_pearson_loss: 0.3661
+learn rate: 0.001000
+epoch: 280, train_mse: 0.000226, train_pearson_loss: 0.3158, test_mse: 0.001002, test_pearson_loss: 0.3756
+learn rate: 0.001000
+epoch: 290, train_mse: 0.000223, train_pearson_loss: 0.3153, test_mse: 0.000891, test_pearson_loss: 0.3628
+learn rate: 0.001000
+epoch: 300, train_mse: 0.000220, train_pearson_loss: 0.3118, test_mse: 0.000901, test_pearson_loss: 0.3614
+learn rate: 0.001000
+epoch: 310, train_mse: 0.000219, train_pearson_loss: 0.3099, test_mse: 0.000903, test_pearson_loss: 0.3610
+learn rate: 0.001000
+epoch: 320, train_mse: 0.000216, train_pearson_loss: 0.3078, test_mse: 0.000918, test_pearson_loss: 0.3620
+learn rate: 0.001000
+epoch: 330, train_mse: 0.000215, train_pearson_loss: 0.3059, test_mse: 0.000864, test_pearson_loss: 0.3630
+learn rate: 0.001000
+epoch: 340, train_mse: 0.000216, train_pearson_loss: 0.3048, test_mse: 0.000900, test_pearson_loss: 0.3641
+learn rate: 0.001000
+epoch: 350, train_mse: 0.000212, train_pearson_loss: 0.3025, test_mse: 0.000921, test_pearson_loss: 0.3620
+learn rate: 0.001000
+epoch: 360, train_mse: 0.000212, train_pearson_loss: 0.3011, test_mse: 0.000934, test_pearson_loss: 0.3622
+learn rate: 0.001000
+epoch: 370, train_mse: 0.000229, train_pearson_loss: 0.3242, test_mse: 0.000918, test_pearson_loss: 0.3662
+learn rate: 0.001000
+epoch: 380, train_mse: 0.000210, train_pearson_loss: 0.3017, test_mse: 0.000884, test_pearson_loss: 0.3610
+learn rate: 0.001000
+epoch: 390, train_mse: 0.000210, train_pearson_loss: 0.2989, test_mse: 0.000926, test_pearson_loss: 0.3606
+learn rate: 0.001000
+epoch: 400, train_mse: 0.000210, train_pearson_loss: 0.2985, test_mse: 0.000901, test_pearson_loss: 0.3608
+learn rate: 0.001000
+epoch: 410, train_mse: 0.000208, train_pearson_loss: 0.2968, test_mse: 0.000911, test_pearson_loss: 0.3605
+learn rate: 0.001000
+epoch: 420, train_mse: 0.000209, train_pearson_loss: 0.2969, test_mse: 0.000905, test_pearson_loss: 0.3599
+learn rate: 0.001000
+epoch: 430, train_mse: 0.000204, train_pearson_loss: 0.2927, test_mse: 0.000897, test_pearson_loss: 0.3593
+learn rate: 0.001000
+epoch: 440, train_mse: 0.000203, train_pearson_loss: 0.2914, test_mse: 0.000909, test_pearson_loss: 0.3621
+learn rate: 0.001000
+epoch: 450, train_mse: 0.000202, train_pearson_loss: 0.2901, test_mse: 0.000916, test_pearson_loss: 0.3597
+learn rate: 0.001000
+epoch: 460, train_mse: 0.000203, train_pearson_loss: 0.2885, test_mse: 0.000909, test_pearson_loss: 0.3606
+learn rate: 0.001000
+epoch: 470, train_mse: 0.000199, train_pearson_loss: 0.2866, test_mse: 0.000915, test_pearson_loss: 0.3622
+learn rate: 0.001000
+epoch: 480, train_mse: 0.000199, train_pearson_loss: 0.2856, test_mse: 0.000942, test_pearson_loss: 0.3610
+learn rate: 0.001000
+epoch: 490, train_mse: 0.000199, train_pearson_loss: 0.2848, test_mse: 0.000902, test_pearson_loss: 0.3601
+learn rate: 0.001000
+Saving checkpoint to /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_noattn_3CzljY0c/checkpoint_epoch_500...
+epoch: 500, train_mse: 0.000197, train_pearson_loss: 0.2828, test_mse: 0.000934, test_pearson_loss: 0.3607
+learn rate: 0.001000
+epoch: 510, train_mse: 0.000197, train_pearson_loss: 0.2813, test_mse: 0.000903, test_pearson_loss: 0.3606
+learn rate: 0.001000
+epoch: 520, train_mse: 0.000196, train_pearson_loss: 0.2798, test_mse: 0.000920, test_pearson_loss: 0.3619
+learn rate: 0.001000
+epoch: 530, train_mse: 0.000193, train_pearson_loss: 0.2775, test_mse: 0.000890, test_pearson_loss: 0.3598
+learn rate: 0.001000
+epoch: 540, train_mse: 0.000193, train_pearson_loss: 0.2771, test_mse: 0.000935, test_pearson_loss: 0.3614
+learn rate: 0.001000
+epoch: 550, train_mse: 0.000195, train_pearson_loss: 0.2766, test_mse: 0.000916, test_pearson_loss: 0.3619
+learn rate: 0.001000
+epoch: 560, train_mse: 0.000191, train_pearson_loss: 0.2734, test_mse: 0.000918, test_pearson_loss: 0.3608
+learn rate: 0.001000
+epoch: 570, train_mse: 0.000189, train_pearson_loss: 0.2721, test_mse: 0.000901, test_pearson_loss: 0.3604
+learn rate: 0.001000
+epoch: 580, train_mse: 0.000191, train_pearson_loss: 0.2705, test_mse: 0.000930, test_pearson_loss: 0.3610
+learn rate: 0.001000
+epoch: 590, train_mse: 0.000192, train_pearson_loss: 0.2777, test_mse: 0.000943, test_pearson_loss: 0.3609
+learn rate: 0.001000
+epoch: 600, train_mse: 0.000189, train_pearson_loss: 0.2708, test_mse: 0.000913, test_pearson_loss: 0.3628
+learn rate: 0.001000
+epoch: 610, train_mse: 0.000186, train_pearson_loss: 0.2685, test_mse: 0.000941, test_pearson_loss: 0.3622
+learn rate: 0.001000
+epoch: 620, train_mse: 0.000184, train_pearson_loss: 0.2660, test_mse: 0.000921, test_pearson_loss: 0.3643
+learn rate: 0.001000
+epoch: 630, train_mse: 0.000185, train_pearson_loss: 0.2652, test_mse: 0.000922, test_pearson_loss: 0.3617
+learn rate: 0.001000
+epoch: 640, train_mse: 0.000187, train_pearson_loss: 0.2667, test_mse: 0.000945, test_pearson_loss: 0.3610
+learn rate: 0.001000
+epoch: 650, train_mse: 0.000181, train_pearson_loss: 0.2617, test_mse: 0.000924, test_pearson_loss: 0.3595
+learn rate: 0.001000
+epoch: 660, train_mse: 0.000181, train_pearson_loss: 0.2601, test_mse: 0.000941, test_pearson_loss: 0.3619
+learn rate: 0.001000
+epoch: 670, train_mse: 0.000184, train_pearson_loss: 0.2673, test_mse: 0.000928, test_pearson_loss: 0.3640
+learn rate: 0.001000
+epoch: 680, train_mse: 0.000181, train_pearson_loss: 0.2611, test_mse: 0.000910, test_pearson_loss: 0.3631
+learn rate: 0.001000
+epoch: 690, train_mse: 0.000178, train_pearson_loss: 0.2581, test_mse: 0.000914, test_pearson_loss: 0.3630
+learn rate: 0.001000
+epoch: 700, train_mse: 0.000177, train_pearson_loss: 0.2566, test_mse: 0.000900, test_pearson_loss: 0.3638
+learn rate: 0.001000
+epoch: 710, train_mse: 0.000177, train_pearson_loss: 0.2553, test_mse: 0.000913, test_pearson_loss: 0.3641
+learn rate: 0.001000
+epoch: 720, train_mse: 0.000176, train_pearson_loss: 0.2541, test_mse: 0.000917, test_pearson_loss: 0.3625
+learn rate: 0.001000
+epoch: 730, train_mse: 0.000176, train_pearson_loss: 0.2546, test_mse: 0.000907, test_pearson_loss: 0.3635
+learn rate: 0.001000
+epoch: 740, train_mse: 0.000175, train_pearson_loss: 0.2522, test_mse: 0.000905, test_pearson_loss: 0.3620
+learn rate: 0.001000
+epoch: 750, train_mse: 0.000173, train_pearson_loss: 0.2505, test_mse: 0.000928, test_pearson_loss: 0.3740
+learn rate: 0.001000
+epoch: 760, train_mse: 0.000175, train_pearson_loss: 0.2506, test_mse: 0.000934, test_pearson_loss: 0.3614
+learn rate: 0.001000
+epoch: 770, train_mse: 0.000172, train_pearson_loss: 0.2487, test_mse: 0.000901, test_pearson_loss: 0.3623
+learn rate: 0.001000
+epoch: 780, train_mse: 0.000172, train_pearson_loss: 0.2479, test_mse: 0.000906, test_pearson_loss: 0.3623
+learn rate: 0.001000
+epoch: 790, train_mse: 0.000172, train_pearson_loss: 0.2489, test_mse: 0.000895, test_pearson_loss: 0.3626
+learn rate: 0.001000
+epoch: 800, train_mse: 0.000170, train_pearson_loss: 0.2456, test_mse: 0.000912, test_pearson_loss: 0.3658
+learn rate: 0.001000
+epoch: 810, train_mse: 0.000168, train_pearson_loss: 0.2444, test_mse: 0.000906, test_pearson_loss: 0.3628
+learn rate: 0.001000
+epoch: 820, train_mse: 0.000174, train_pearson_loss: 0.2543, test_mse: 0.000925, test_pearson_loss: 0.3634
+learn rate: 0.001000
+epoch: 830, train_mse: 0.000170, train_pearson_loss: 0.2458, test_mse: 0.000936, test_pearson_loss: 0.3631
+learn rate: 0.001000
+epoch: 840, train_mse: 0.000169, train_pearson_loss: 0.2438, test_mse: 0.000915, test_pearson_loss: 0.3619
+learn rate: 0.001000
+epoch: 850, train_mse: 0.000173, train_pearson_loss: 0.2456, test_mse: 0.000916, test_pearson_loss: 0.3623
+learn rate: 0.001000
+epoch: 860, train_mse: 0.000166, train_pearson_loss: 0.2414, test_mse: 0.000907, test_pearson_loss: 0.3628
+learn rate: 0.001000
+epoch: 870, train_mse: 0.000167, train_pearson_loss: 0.2409, test_mse: 0.000911, test_pearson_loss: 0.3651
+learn rate: 0.001000
+epoch: 880, train_mse: 0.000165, train_pearson_loss: 0.2394, test_mse: 0.000932, test_pearson_loss: 0.3637
+learn rate: 0.001000
+epoch: 890, train_mse: 0.000171, train_pearson_loss: 0.2450, test_mse: 0.000919, test_pearson_loss: 0.3636
+learn rate: 0.001000
+epoch: 900, train_mse: 0.000165, train_pearson_loss: 0.2386, test_mse: 0.000940, test_pearson_loss: 0.3641
+learn rate: 0.001000
+epoch: 910, train_mse: 0.000163, train_pearson_loss: 0.2372, test_mse: 0.000922, test_pearson_loss: 0.3635
+learn rate: 0.001000
+epoch: 920, train_mse: 0.000162, train_pearson_loss: 0.2365, test_mse: 0.000913, test_pearson_loss: 0.3634
+learn rate: 0.001000
+epoch: 930, train_mse: 0.000163, train_pearson_loss: 0.2374, test_mse: 0.000951, test_pearson_loss: 0.3634
+learn rate: 0.001000
+epoch: 940, train_mse: 0.000162, train_pearson_loss: 0.2353, test_mse: 0.000935, test_pearson_loss: 0.3632
+learn rate: 0.001000
+epoch: 950, train_mse: 0.000162, train_pearson_loss: 0.2345, test_mse: 0.000932, test_pearson_loss: 0.3653
+learn rate: 0.001000
+epoch: 960, train_mse: 0.000165, train_pearson_loss: 0.2369, test_mse: 0.000920, test_pearson_loss: 0.3685
+learn rate: 0.001000
+epoch: 970, train_mse: 0.000161, train_pearson_loss: 0.2336, test_mse: 0.000944, test_pearson_loss: 0.3636
+learn rate: 0.001000
+epoch: 980, train_mse: 0.000162, train_pearson_loss: 0.2345, test_mse: 0.000922, test_pearson_loss: 0.3646
+learn rate: 0.001000
+epoch: 990, train_mse: 0.000160, train_pearson_loss: 0.2323, test_mse: 0.000931, test_pearson_loss: 0.3640
+learn rate: 0.001000
+Saving checkpoint to /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_noattn_3CzljY0c/checkpoint_epoch_1000...
+epoch: 1000, train_mse: 0.000162, train_pearson_loss: 0.2337, test_mse: 0.000918, test_pearson_loss: 0.3649
+learn rate: 0.001000
+epoch: 1010, train_mse: 0.000193, train_pearson_loss: 0.2694, test_mse: 0.000968, test_pearson_loss: 0.3683
+learn rate: 0.001000
+epoch: 1020, train_mse: 0.000159, train_pearson_loss: 0.2326, test_mse: 0.000930, test_pearson_loss: 0.3638
+learn rate: 0.001000
+epoch: 1030, train_mse: 0.000158, train_pearson_loss: 0.2310, test_mse: 0.000969, test_pearson_loss: 0.3648
+learn rate: 0.001000
+epoch: 1040, train_mse: 0.000159, train_pearson_loss: 0.2302, test_mse: 0.000938, test_pearson_loss: 0.3640
+learn rate: 0.001000
+epoch: 1050, train_mse: 0.000157, train_pearson_loss: 0.2294, test_mse: 0.000927, test_pearson_loss: 0.3630
+learn rate: 0.001000
+epoch: 1060, train_mse: 0.000157, train_pearson_loss: 0.2289, test_mse: 0.000924, test_pearson_loss: 0.3649
+learn rate: 0.001000
+epoch: 1070, train_mse: 0.000157, train_pearson_loss: 0.2282, test_mse: 0.000935, test_pearson_loss: 0.3648
+learn rate: 0.001000
+epoch: 1080, train_mse: 0.000156, train_pearson_loss: 0.2273, test_mse: 0.000921, test_pearson_loss: 0.3664
+learn rate: 0.001000
+epoch: 1090, train_mse: 0.000156, train_pearson_loss: 0.2271, test_mse: 0.000920, test_pearson_loss: 0.3670
+learn rate: 0.001000
+epoch: 1100, train_mse: 0.000164, train_pearson_loss: 0.2344, test_mse: 0.000905, test_pearson_loss: 0.3645
+learn rate: 0.001000
+epoch: 1110, train_mse: 0.000155, train_pearson_loss: 0.2265, test_mse: 0.000920, test_pearson_loss: 0.3637
+learn rate: 0.001000
+epoch: 1120, train_mse: 0.000155, train_pearson_loss: 0.2258, test_mse: 0.000900, test_pearson_loss: 0.3645
+learn rate: 0.001000
+epoch: 1130, train_mse: 0.000154, train_pearson_loss: 0.2251, test_mse: 0.000923, test_pearson_loss: 0.3669
+learn rate: 0.001000
+epoch: 1140, train_mse: 0.000154, train_pearson_loss: 0.2244, test_mse: 0.000937, test_pearson_loss: 0.3643
+learn rate: 0.001000
+epoch: 1150, train_mse: 0.000154, train_pearson_loss: 0.2244, test_mse: 0.000943, test_pearson_loss: 0.3656
+learn rate: 0.001000
+epoch: 1160, train_mse: 0.000153, train_pearson_loss: 0.2238, test_mse: 0.000928, test_pearson_loss: 0.3653
+learn rate: 0.001000
+epoch: 1170, train_mse: 0.000153, train_pearson_loss: 0.2235, test_mse: 0.000896, test_pearson_loss: 0.3657
+learn rate: 0.001000
+epoch: 1180, train_mse: 0.000152, train_pearson_loss: 0.2228, test_mse: 0.000913, test_pearson_loss: 0.3655
+learn rate: 0.001000
+epoch: 1190, train_mse: 0.000152, train_pearson_loss: 0.2222, test_mse: 0.000914, test_pearson_loss: 0.3671
+learn rate: 0.001000
+epoch: 1200, train_mse: 0.000152, train_pearson_loss: 0.2219, test_mse: 0.000953, test_pearson_loss: 0.3655
+learn rate: 0.001000
+epoch: 1210, train_mse: 0.000151, train_pearson_loss: 0.2215, test_mse: 0.000927, test_pearson_loss: 0.3667
+learn rate: 0.001000
+epoch: 1220, train_mse: 0.000153, train_pearson_loss: 0.2218, test_mse: 0.000918, test_pearson_loss: 0.3652
+learn rate: 0.001000
+epoch: 1230, train_mse: 0.000154, train_pearson_loss: 0.2224, test_mse: 0.000928, test_pearson_loss: 0.3646
+learn rate: 0.001000
+epoch: 1240, train_mse: 0.000152, train_pearson_loss: 0.2207, test_mse: 0.000915, test_pearson_loss: 0.3684
+learn rate: 0.001000
+epoch: 1250, train_mse: 0.000152, train_pearson_loss: 0.2206, test_mse: 0.000929, test_pearson_loss: 0.3647
+learn rate: 0.001000
+epoch: 1260, train_mse: 0.000151, train_pearson_loss: 0.2201, test_mse: 0.000914, test_pearson_loss: 0.3657
+learn rate: 0.001000
+epoch: 1270, train_mse: 0.000151, train_pearson_loss: 0.2210, test_mse: 0.000923, test_pearson_loss: 0.3651
+learn rate: 0.001000
+epoch: 1280, train_mse: 0.000150, train_pearson_loss: 0.2189, test_mse: 0.000943, test_pearson_loss: 0.3653
+learn rate: 0.001000
+epoch: 1290, train_mse: 0.000151, train_pearson_loss: 0.2188, test_mse: 0.000929, test_pearson_loss: 0.3657
+learn rate: 0.001000
+epoch: 1300, train_mse: 0.000150, train_pearson_loss: 0.2195, test_mse: 0.000911, test_pearson_loss: 0.3648
+learn rate: 0.001000
+epoch: 1310, train_mse: 0.000149, train_pearson_loss: 0.2183, test_mse: 0.000922, test_pearson_loss: 0.3652
+learn rate: 0.001000
+epoch: 1320, train_mse: 0.000150, train_pearson_loss: 0.2179, test_mse: 0.000908, test_pearson_loss: 0.3659
+learn rate: 0.001000
+epoch: 1330, train_mse: 0.000149, train_pearson_loss: 0.2174, test_mse: 0.000919, test_pearson_loss: 0.3666
+learn rate: 0.001000
+epoch: 1340, train_mse: 0.000149, train_pearson_loss: 0.2181, test_mse: 0.000923, test_pearson_loss: 0.3647
+learn rate: 0.001000
+epoch: 1350, train_mse: 0.000149, train_pearson_loss: 0.2170, test_mse: 0.000935, test_pearson_loss: 0.3673
+learn rate: 0.001000
+epoch: 1360, train_mse: 0.000149, train_pearson_loss: 0.2173, test_mse: 0.000921, test_pearson_loss: 0.3642
+learn rate: 0.001000
+epoch: 1370, train_mse: 0.000148, train_pearson_loss: 0.2166, test_mse: 0.000918, test_pearson_loss: 0.3656
+learn rate: 0.001000
+epoch: 1380, train_mse: 0.000149, train_pearson_loss: 0.2170, test_mse: 0.000917, test_pearson_loss: 0.3648
+learn rate: 0.001000
+epoch: 1390, train_mse: 0.000147, train_pearson_loss: 0.2156, test_mse: 0.000918, test_pearson_loss: 0.3655
+learn rate: 0.001000
+epoch: 1400, train_mse: 0.000149, train_pearson_loss: 0.2159, test_mse: 0.000922, test_pearson_loss: 0.3673
+learn rate: 0.001000
+epoch: 1410, train_mse: 0.000147, train_pearson_loss: 0.2151, test_mse: 0.000918, test_pearson_loss: 0.3650
+learn rate: 0.001000
+epoch: 1420, train_mse: 0.000147, train_pearson_loss: 0.2149, test_mse: 0.000917, test_pearson_loss: 0.3657
+learn rate: 0.001000
+epoch: 1430, train_mse: 0.000148, train_pearson_loss: 0.2151, test_mse: 0.000940, test_pearson_loss: 0.3646
+learn rate: 0.001000

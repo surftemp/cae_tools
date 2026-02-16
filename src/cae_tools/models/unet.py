@@ -38,8 +38,9 @@ class ChannelAttention(nn.Module):
         return self.sigmoid(out)
 
 class Encoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.1):
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.1, use_fc=True):
         super().__init__()
+        self.use_fc = use_fc
 
         encoder_layers = []
         for layer in layers:
@@ -52,19 +53,34 @@ class Encoder(nn.Module):
             encoder_layers.append(nn.Dropout(dropout_rate))  # Add dropout after ReLU
 
         self.encoder_cnn = nn.ModuleList(encoder_layers)
-        self.flatten = nn.Flatten(start_dim=1)
 
         (chan, y, x) = layers[-1].get_output_dimensions()
-
-        self.encoder_lin = nn.Sequential(
-            nn.Linear(chan * y * x, fc_size),
-            nn.BatchNorm1d(fc_size),
-            nn.ReLU(True),
-            nn.Dropout(dropout_rate),  # Add dropout after ReLU            
-            nn.Linear(fc_size, encoded_space_dim),
-            nn.ReLU(True),
-            nn.Dropout(dropout_rate)  # Add dropout after ReLU
-        )
+        if self.use_fc:
+            self.flatten = nn.Flatten(start_dim=1)
+            self.encoder_lin = nn.Sequential(
+                nn.Linear(chan * y * x, fc_size),
+                nn.BatchNorm1d(fc_size),
+                nn.ReLU(True),
+                nn.Dropout(dropout_rate),
+                nn.Linear(fc_size, encoded_space_dim),
+                nn.ReLU(True),
+                nn.Dropout(dropout_rate)
+            )
+            self.bridge = None
+        else:
+            self.flatten = None
+            self.encoder_lin = None
+            # Conv bridge: two 3x3 convolutions preserving spatial dimensions
+            self.bridge = nn.Sequential(
+                nn.Conv2d(chan, chan, kernel_size=3, padding=1),
+                nn.BatchNorm2d(chan),
+                nn.ReLU(True),
+                nn.Dropout(dropout_rate),
+                nn.Conv2d(chan, chan, kernel_size=3, padding=1),
+                nn.BatchNorm2d(chan),
+                nn.ReLU(True),
+                nn.Dropout(dropout_rate),
+            )
 
     def forward(self, x):
         x_skip = []
@@ -73,29 +89,38 @@ class Encoder(nn.Module):
             if isinstance(layer, nn.ReLU):
                 x_skip.append(x)
 
-        x = self.flatten(x)
-        x = self.encoder_lin(x)
+        if self.use_fc:
+            x = self.flatten(x)
+            x = self.encoder_lin(x)
+        else:
+            x = self.bridge(x)
+
         x_skip.pop()  # remove the last layer's output, not used for skip connections
         return x, x_skip
 
 class Decoder(nn.Module):
-    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.1):
+    def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.1, use_fc=True, use_attention=True):
         super().__init__()
+        self.use_fc = use_fc
+        self.use_attention = use_attention
 
         (chan, y, x) = layers[0].get_input_dimensions()
         self.chan, self.y, self.x = layers[0].get_input_dimensions()
 
-        self.decoder_lin = nn.Sequential(
-            nn.Linear(encoded_space_dim, fc_size),
-            nn.BatchNorm1d(fc_size),
-            nn.ReLU(True),
-            nn.Dropout(dropout_rate),  # Add dropout after ReLU            
-            nn.Linear(fc_size, chan * y * x),
-            nn.ReLU(True),
-            nn.Dropout(dropout_rate)  # Add dropout after ReLU
-        )
-
-        self.unflatten = nn.Unflatten(dim=1, unflattened_size=(chan, y, x))
+        if self.use_fc:
+            self.decoder_lin = nn.Sequential(
+                nn.Linear(encoded_space_dim, fc_size),
+                nn.BatchNorm1d(fc_size),
+                nn.ReLU(True),
+                nn.Dropout(dropout_rate),
+                nn.Linear(fc_size, chan * y * x),
+                nn.ReLU(True),
+                nn.Dropout(dropout_rate)
+            )
+            self.unflatten = nn.Unflatten(dim=1, unflattened_size=(chan, y, x))
+        else:
+            self.decoder_lin = None
+            self.unflatten = None
 
         decoder_layers = []
         self.attention_layers = nn.ModuleList()
@@ -106,7 +131,8 @@ class Decoder(nn.Module):
                 nn.ConvTranspose2d(input_channels, output_channels, kernel_size=layer.get_kernel_size(),
                                    stride=layer.get_stride(), padding=layer.get_output_padding()))
             if layer != layers[-1]:
-                self.attention_layers.append(ChannelAttention(output_channels))                
+                if self.use_attention:
+                    self.attention_layers.append(ChannelAttention(output_channels))
                 decoder_layers.append(nn.BatchNorm2d(output_channels * 2))
                 decoder_layers.append(nn.ReLU(True))
                 decoder_layers.append(nn.Dropout(dropout_rate))  # Add dropout after ReLU
@@ -114,16 +140,18 @@ class Decoder(nn.Module):
         self.decoder_conv = nn.ModuleList(decoder_layers)
 
     def forward(self, x, x_skip):
-        x = self.decoder_lin(x)
-        x = self.unflatten(x)
+        if self.use_fc:
+            x = self.decoder_lin(x)
+            x = self.unflatten(x)
         x_skip = x_skip[::-1]  # reverse to match decoder order
 
         skip_idx = 0        
         for layer in self.decoder_conv:
             x = layer(x)
             if isinstance(layer, nn.ConvTranspose2d) and skip_idx < len(x_skip):
-                attention = self.attention_layers[skip_idx](x)
-                x = x * attention  # Apply attention                
+                if self.use_attention:
+                    attention = self.attention_layers[skip_idx](x)
+                    x = x * attention  # Apply attention                
                 x = torch.cat((x, x_skip[skip_idx]), 1)
                 skip_idx += 1            
         x = torch.sigmoid(x)
@@ -169,7 +197,7 @@ class UNET(BaseModel):
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, dropout_rate=0.1, use_gpu=True, conv_kernel_size=3, conv_stride=2,
                  conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1,
-                 checkpoint_interval=None):
+                 checkpoint_interval=None, bottleneck_type='fc', use_attention=True):
         """
         Create a convolutional autoencoder general model
 
@@ -189,6 +217,8 @@ class UNET(BaseModel):
         :param conv_output_layer_count: number of output convolutional layers to use
         :param database_path: path to optional tracking database
         :param checkpoint_interval: save checkpoint every N epochs (None to disable)
+        :param bottleneck_type: 'fc' for FC bottleneck (default), 'conv' for fully convolutional UNET
+        :param use_attention: whether to use channel attention on skip connections (default True)
         """
         super().__init__()
         self.normalise_input = normalise_input
@@ -218,6 +248,8 @@ class UNET(BaseModel):
         self.lambda_l1 = lambda_l1
         self.lambda_pearson = lambda_pearson
         self.checkpoint_interval = checkpoint_interval
+        self.bottleneck_type = bottleneck_type
+        self.use_attention = use_attention
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
         self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
@@ -241,6 +273,8 @@ class UNET(BaseModel):
             "conv_stride": self.conv_stride,
             "conv_input_layer_count": self.conv_input_layer_count,
             "conv_output_layer_count": self.conv_output_layer_count,
+            "bottleneck_type": self.bottleneck_type,
+            "use_attention": self.use_attention,
             "model_id": self.get_model_id()
         }
 
@@ -445,10 +479,11 @@ class UNET(BaseModel):
                                  kernel_size=self.conv_kernel_size, stride=self.conv_stride,
                                  input_layer_count=self.conv_input_layer_count, output_layer_count=self.conv_output_layer_count)
 
+        use_fc = (self.bottleneck_type == 'fc')
         if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate)
+            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc)
         if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate)
+            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention)
 #         if not self.discriminator:
 #             self.discriminator = Discriminator(output_chan)  # Ensure discriminator input channels match output image channels
         
@@ -488,34 +523,8 @@ class UNET(BaseModel):
 #         self.discriminator.to(device)
 
         self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        
-        # Restore optimizer state if available (for training continuation)
-        if hasattr(self, '_saved_optimizer_state_path') and self._saved_optimizer_state_path:
-            print(f"Restoring optimizer state from {self._saved_optimizer_state_path}...")
-            optimizer_state = torch.load(self._saved_optimizer_state_path, map_location=device)
-            self.optim.load_state_dict(optimizer_state)
-            self._saved_optimizer_state_path = None
-        
         T_max=500
-        self._scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
-        
-        # Restore scheduler state if available (for training continuation)
-        if hasattr(self, '_saved_scheduler_state_path') and self._saved_scheduler_state_path:
-            print(f"Restoring scheduler state from {self._saved_scheduler_state_path}...")
-            scheduler_state = torch.load(self._saved_scheduler_state_path, map_location=device)
-            self._scheduler.load_state_dict(scheduler_state)
-            self._saved_scheduler_state_path = None
-        
-        # Determine root model path for checkpoints (avoid nesting inside checkpoint folders)
-        if hasattr(self, '_loaded_from_folder') and self._loaded_from_folder:
-            loaded_path = self._loaded_from_folder
-            if 'checkpoint_' in os.path.basename(loaded_path):
-                root_model_path = os.path.dirname(loaded_path)
-                print(f"Detected checkpoint continuation, saving new checkpoints to parent: {root_model_path}")
-            else:
-                root_model_path = model_path
-        else:
-            root_model_path = model_path
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
 
         # Keep batches on CPU, move to GPU per-batch to avoid VRAM OOM
         train_batches = [(low_res, high_res, labels) for low_res, high_res, labels in train_loader]
@@ -525,7 +534,7 @@ class UNET(BaseModel):
             for epoch in range(self.nr_epochs):
                 train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches, device)
                 if epoch<T_max:
-                    self._scheduler.step()
+                    scheduler.step()
                 if epoch % self.test_interval == 0:
                     test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches, device)
 #                     scheduler_D.step(test_loss)     
@@ -543,12 +552,12 @@ class UNET(BaseModel):
 #                     break    
 
                 # Save checkpoint every N epochs
-                if self.checkpoint_interval and root_model_path and (epoch + 1) % self.checkpoint_interval == 0:
+                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
                     # Temporarily update nr_epochs to reflect actual progress
                     original_nr_epochs = self.history['nr_epochs']
                     self.history['nr_epochs'] = original_nr_epochs + epoch + 1
                     
-                    checkpoint_path = os.path.join(root_model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
                     
@@ -558,8 +567,8 @@ class UNET(BaseModel):
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
             # Save emergency checkpoint on interrupt
-            if root_model_path:
-                emergency_path = os.path.join(root_model_path, "checkpoint_interrupted")
+            if model_path:
+                emergency_path = os.path.join(model_path, "checkpoint_interrupted")
                 print(f"Saving emergency checkpoint to {emergency_path}...")
                 self.history['nr_epochs'] += epoch + 1
                 self.save(emergency_path)
@@ -625,10 +634,11 @@ class UNET(BaseModel):
                                  kernel_size=self.conv_kernel_size, stride=self.conv_stride,
                                  input_layer_count=self.conv_input_layer_count, output_layer_count=self.conv_output_layer_count)
 
+        use_fc = (self.bottleneck_type == 'fc')
         if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate)
+            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc)
         if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate)
+            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention)
 
         train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
@@ -647,37 +657,8 @@ class UNET(BaseModel):
         self.decoder.to(device)
 
         self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        
-        # Restore optimizer state if available (for training continuation)
-        if hasattr(self, '_saved_optimizer_state_path') and self._saved_optimizer_state_path:
-            print(f"Restoring optimizer state from {self._saved_optimizer_state_path}...")
-            optimizer_state = torch.load(self._saved_optimizer_state_path, map_location=device)
-            self.optim.load_state_dict(optimizer_state)
-            # Clear the path so we don't reload on next training call
-            self._saved_optimizer_state_path = None
-        
         T_max = 500
-        self._scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
-        
-        # Restore scheduler state if available (for training continuation)
-        if hasattr(self, '_saved_scheduler_state_path') and self._saved_scheduler_state_path:
-            print(f"Restoring scheduler state from {self._saved_scheduler_state_path}...")
-            scheduler_state = torch.load(self._saved_scheduler_state_path, map_location=device)
-            self._scheduler.load_state_dict(scheduler_state)
-            self._saved_scheduler_state_path = None
-        
-        # Determine root model path for checkpoints (avoid nesting inside checkpoint folders)
-        if hasattr(self, '_loaded_from_folder') and self._loaded_from_folder:
-            # If loaded from a checkpoint, find the parent model folder
-            loaded_path = self._loaded_from_folder
-            if 'checkpoint_' in os.path.basename(loaded_path):
-                # This is a checkpoint folder, use its parent
-                root_model_path = os.path.dirname(loaded_path)
-                print(f"Detected checkpoint continuation, saving new checkpoints to parent: {root_model_path}")
-            else:
-                root_model_path = model_path
-        else:
-            root_model_path = model_path
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
 
         # No batch preloading needed - PreprocessedDataset.__getitem__ is fast (just tensor slicing)
         # DataLoader iterates directly over the in-memory tensors
@@ -686,7 +667,7 @@ class UNET(BaseModel):
             for epoch in range(self.nr_epochs):
                 train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
                 if epoch < T_max:
-                    self._scheduler.step()
+                    scheduler.step()
                 if epoch % self.test_interval == 0:
                     test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_from_loader(test_loader, device)
                     lr = self.get_lr(self.optim)
@@ -696,12 +677,12 @@ class UNET(BaseModel):
                     print(f"learn rate: {lr:.6f}")
                 
                 # Save checkpoint every N epochs
-                if self.checkpoint_interval and root_model_path and (epoch + 1) % self.checkpoint_interval == 0:
+                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
                     # Temporarily update nr_epochs to reflect actual progress
                     original_nr_epochs = self.history['nr_epochs']
                     self.history['nr_epochs'] = original_nr_epochs + epoch + 1
                     
-                    checkpoint_path = os.path.join(root_model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
                     
@@ -711,8 +692,8 @@ class UNET(BaseModel):
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
             # Save emergency checkpoint on interrupt
-            if root_model_path:
-                emergency_path = os.path.join(root_model_path, "checkpoint_interrupted")
+            if model_path:
+                emergency_path = os.path.join(model_path, "checkpoint_interrupted")
                 print(f"Saving emergency checkpoint to {emergency_path}...")
                 self.history['nr_epochs'] += epoch + 1
                 self.save(emergency_path)
@@ -780,16 +761,6 @@ class UNET(BaseModel):
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
 
-        # Save optimizer state for proper training continuation
-        if self.optim is not None:
-            optimizer_path = os.path.join(to_folder, "optimizer.state")
-            torch.save(self.optim.state_dict(), optimizer_path)
-        
-        # Save scheduler state if available
-        if hasattr(self, '_scheduler') and self._scheduler is not None:
-            scheduler_path = os.path.join(to_folder, "scheduler.state")
-            torch.save(self._scheduler.state_dict(), scheduler_path)
-
         parameters = self.get_parameters()
 
         parameters_path = os.path.join(to_folder, "parameters.json")
@@ -838,6 +809,10 @@ class UNET(BaseModel):
             self.conv_stride = parameters.get("conv_stride", None)
             self.conv_input_layer_count = parameters.get("conv_input_layer_count", None)
             self.conv_output_layer_count = parameters.get("conv_output_layer_count", None)
+            self.bottleneck_type = parameters.get("bottleneck_type", "fc")
+            self.use_attention = parameters.get("use_attention", True)
+
+        use_fc = (self.bottleneck_type == 'fc')
 
         history_path = os.path.join(from_folder, "history.json")
         with open(history_path) as f:
@@ -848,8 +823,8 @@ class UNET(BaseModel):
             self.spec = ModelSpec()
             self.spec.load(json.loads(f.read()))
 
-        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate)
-        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate)
+        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc)
+        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
 #         self.encoder.load_state_dict(torch.load(encoder_path))
@@ -859,27 +834,6 @@ class UNET(BaseModel):
 #         self.decoder.load_state_dict(torch.load(decoder_path))
         self.decoder.load_state_dict(self.torch_load(decoder_path))
         self.decoder.eval()
-        
-        # Store optimizer state path for restoration during training continuation
-        optimizer_path = os.path.join(from_folder, "optimizer.state")
-        if os.path.exists(optimizer_path):
-            self._saved_optimizer_state_path = optimizer_path
-            print(f"Found saved optimizer state at {optimizer_path}")
-        else:
-            self._saved_optimizer_state_path = None
-            print("No saved optimizer state found (optimizer will start fresh)")
-        
-        # Store scheduler state path for restoration during training continuation
-        scheduler_path = os.path.join(from_folder, "scheduler.state")
-        if os.path.exists(scheduler_path):
-            self._saved_scheduler_state_path = scheduler_path
-            print(f"Found saved scheduler state at {scheduler_path}")
-        else:
-            self._saved_scheduler_state_path = None
-        
-        # Store the loaded model folder path to determine root model path for checkpoints
-        self._loaded_from_folder = from_folder
-        
         super().load(from_folder)
 
     def pearson_corr_torch(self, decoded_data, high_res):
