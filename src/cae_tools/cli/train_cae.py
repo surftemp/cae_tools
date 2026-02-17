@@ -68,6 +68,12 @@ def main():
                         help="scale factor for skip connections (default: 1.0)")
     parser.add_argument("--latent-activation", type=str, choices=["relu", "leaky_relu", "none"], default="relu",
                         help="activation function for bottleneck FC layers (default: relu)")
+    parser.add_argument("--output-activation", type=str, choices=["sigmoid", "tanh"], default="sigmoid",
+                        help="output activation: sigmoid for [0,1], tanh for [-1,1] (default: sigmoid)")
+    parser.add_argument("--predict-delta", action="store_true", default=False,
+                        help="model predicts delta (LST - ERA5); apply_cae adds ERA5 back for physical LST")
+    parser.add_argument("--delta-reference-channel", type=str, default=None,
+                        help="input variable name used as reference for delta prediction (e.g. era5_skt)")
 
     args = parser.parse_args()
 
@@ -112,7 +118,10 @@ def main():
                           checkpoint_interval=args.checkpoint_interval, bottleneck_type=args.bottleneck_type,
                           use_attention=not args.no_attention,
                           skip_mode=args.skip_mode, skip_dropout=args.skip_dropout,
-                          skip_scale=args.skip_scale, latent_activation=args.latent_activation)
+                          skip_scale=args.skip_scale, latent_activation=args.latent_activation,
+                          output_activation=args.output_activation,
+                          predict_delta=args.predict_delta,
+                          delta_reference_channel=args.delta_reference_channel)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -209,7 +218,10 @@ def main():
                       checkpoint_interval=args.checkpoint_interval, bottleneck_type=args.bottleneck_type,
                       use_attention=not args.no_attention,
                       skip_mode=args.skip_mode, skip_dropout=args.skip_dropout,
-                      skip_scale=args.skip_scale, latent_activation=args.latent_activation)
+                      skip_scale=args.skip_scale, latent_activation=args.latent_activation,
+                      output_activation=args.output_activation,
+                      predict_delta=args.predict_delta,
+                      delta_reference_channel=args.delta_reference_channel)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

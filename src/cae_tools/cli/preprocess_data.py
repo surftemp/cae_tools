@@ -85,6 +85,12 @@ def main():
                         help='Skip normalization (save raw values)')
     parser.add_argument('--use-norm-from', type=str, default=None,
                         help='Path to .pt file to load normalisation parameters from (use for test/val data)')
+    parser.add_argument('--compute-delta', action='store_true',
+                        help='Compute delta targets: output = LST - ERA5 (for residual learning)')
+    parser.add_argument('--delta-reference-variable', type=str, default='era5_skt',
+                        help='Input variable to subtract from output when --compute-delta (default: era5_skt)')
+    parser.add_argument('--output-activation', type=str, choices=['sigmoid', 'tanh'], default='sigmoid',
+                        help='Output activation: sigmoid normalizes to [0,1], tanh to [-1,1] (default: sigmoid)')
     
     args = parser.parse_args()
     
@@ -162,6 +168,20 @@ def main():
         if (i + 1) % 20 == 0 or (i + 1) == len(files):
             print(f"  Processed {i+1}/{len(files)} files ({idx}/{total_boxes} boxes)")
     
+    # Compute delta targets if requested (LST - ERA5, per pixel)
+    if args.compute_delta:
+        ref_var = args.delta_reference_variable
+        if ref_var not in args.input_variables:
+            print(f"Error: delta reference variable '{ref_var}' not in input variables")
+            sys.exit(1)
+        ref_idx = args.input_variables.index(ref_var)
+        era5_channel = inputs[:, ref_idx:ref_idx+1, :, :]  # (N, 1, y, x)
+        print(f"Computing delta targets: {args.output_variable} - {ref_var}")
+        print(f"  Output range before delta: [{outputs.min():.2f}, {outputs.max():.2f}]")
+        print(f"  ERA5 range: [{era5_channel.min():.2f}, {era5_channel.max():.2f}]")
+        outputs = outputs - era5_channel
+        print(f"  Delta range: [{outputs.min():.2f}, {outputs.max():.2f}]")
+
     # Load or compute normalization parameters
     if args.use_norm_from:
         # Load normalisation parameters from external .pt file (e.g., training data)
@@ -202,6 +222,12 @@ def main():
         normalisation_parameters['max_output'] = float(outputs.max())
         print(f"  {args.output_variable}: [{outputs.min():.4f}, {outputs.max():.4f}]")
     
+    # Store output activation and delta metadata in normalisation_parameters
+    normalisation_parameters['output_activation'] = args.output_activation
+    if args.compute_delta:
+        normalisation_parameters['predict_delta'] = True
+        normalisation_parameters['delta_reference_variable'] = args.delta_reference_variable
+    
     # Normalize data (in-place to save memory)
     if not args.no_normalize:
         print("Normalizing data...")
@@ -218,7 +244,12 @@ def main():
         max_out = normalisation_parameters['max_output']
         range_out = max_out - min_out
         if range_out > 0:
-            outputs = (outputs - min_out) / range_out
+            if args.output_activation == 'tanh':
+                outputs = 2 * (outputs - min_out) / range_out - 1  # → [-1, 1]
+                print(f"  Output normalized to [-1, 1] (tanh mode)")
+            else:
+                outputs = (outputs - min_out) / range_out  # → [0, 1]
+                print(f"  Output normalized to [0, 1] (sigmoid mode)")
     
     # Save to .pt file
     print(f"Saving to {args.output_file}...")
@@ -230,6 +261,9 @@ def main():
         'output_variable': args.output_variable,
         'n_samples': total_boxes,
         'normalized': not args.no_normalize,
+        'output_activation': args.output_activation,
+        'predict_delta': args.compute_delta,
+        'delta_reference_variable': args.delta_reference_variable if args.compute_delta else None,
     }
     
     torch.save(save_dict, args.output_file)

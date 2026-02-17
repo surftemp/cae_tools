@@ -108,13 +108,15 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     def __init__(self, layers, encoded_space_dim, fc_size, dropout_rate=0.1, use_fc=True, use_attention=True,
-                 skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu'):
+                 skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu',
+                 output_activation='sigmoid'):
         super().__init__()
         self.use_fc = use_fc
         self.use_attention = use_attention
         self.skip_mode = skip_mode
         self.skip_dropout = skip_dropout
         self.skip_scale = skip_scale
+        self.output_activation = output_activation
 
         (chan, y, x) = layers[0].get_input_dimensions()
         self.chan, self.y, self.x = layers[0].get_input_dimensions()
@@ -188,7 +190,10 @@ class Decoder(nn.Module):
                     x = x + skip
 
                 skip_idx += 1            
-        x = torch.sigmoid(x)
+        if self.output_activation == 'tanh':
+            x = torch.tanh(x)
+        else:
+            x = torch.sigmoid(x)
         return x 
 
 class VGGPerceptualLoss(nn.Module):
@@ -232,7 +237,8 @@ class UNET(BaseModel):
                  lr=0.001, weight_decay=1e-5, dropout_rate=0.1, use_gpu=True, conv_kernel_size=3, conv_stride=2,
                  conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1,
                  checkpoint_interval=None, bottleneck_type='fc', use_attention=True,
-                 skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu'):
+                 skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu',
+                 output_activation='sigmoid', predict_delta=False, delta_reference_channel=None):
         """
         Create a convolutional autoencoder general model
 
@@ -289,6 +295,9 @@ class UNET(BaseModel):
         self.skip_dropout = skip_dropout
         self.skip_scale = skip_scale
         self.latent_activation = latent_activation
+        self.output_activation = output_activation
+        self.predict_delta = predict_delta
+        self.delta_reference_channel = delta_reference_channel
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
         self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
@@ -318,6 +327,9 @@ class UNET(BaseModel):
             "skip_dropout": self.skip_dropout,
             "skip_scale": self.skip_scale,
             "latent_activation": self.latent_activation,
+            "output_activation": self.output_activation,
+            "predict_delta": self.predict_delta,
+            "delta_reference_channel": self.delta_reference_channel,
             "model_id": self.get_model_id()
         }
 
@@ -526,7 +538,7 @@ class UNET(BaseModel):
         if not self.encoder:
             self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
         if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation)
+            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 #         if not self.discriminator:
 #             self.discriminator = Discriminator(output_chan)  # Ensure discriminator input channels match output image channels
         
@@ -681,7 +693,7 @@ class UNET(BaseModel):
         if not self.encoder:
             self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
         if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation)
+            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 
         train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
@@ -858,6 +870,9 @@ class UNET(BaseModel):
             self.skip_dropout = parameters.get("skip_dropout", 0.0)
             self.skip_scale = parameters.get("skip_scale", 1.0)
             self.latent_activation = parameters.get("latent_activation", "relu")
+            self.output_activation = parameters.get("output_activation", "sigmoid")
+            self.predict_delta = parameters.get("predict_delta", False)
+            self.delta_reference_channel = parameters.get("delta_reference_channel", None)
 
         use_fc = (self.bottleneck_type == 'fc')
 
@@ -871,7 +886,7 @@ class UNET(BaseModel):
             self.spec.load(json.loads(f.read()))
 
         self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
-        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation)
+        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 
         encoder_path = os.path.join(from_folder, "encoder.weights")
 #         self.encoder.load_state_dict(torch.load(encoder_path))

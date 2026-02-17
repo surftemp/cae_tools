@@ -154,7 +154,23 @@ class BaseModel:
             score_batches.append(low_res)
 
         self.score(score_batches, save_arr=score_arr)
-        score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
+        denormed = ds.denormalise_output(score_arr)
+
+        # For residual/delta models: output is Δ in physical units, add ERA5 to get LST
+        if getattr(self, 'predict_delta', False) and self.delta_reference_channel:
+            ref_var = self.delta_reference_channel
+            era5_raw = score_ds[ref_var].values  # raw Kelvin, shape (N, 1, y, x) after broadcast
+            if era5_raw.ndim == 1:
+                era5_raw = np.broadcast_to(
+                    era5_raw[:, np.newaxis, np.newaxis, np.newaxis],
+                    denormed.shape).copy()
+            elif era5_raw.ndim == 2:
+                era5_raw = np.broadcast_to(
+                    era5_raw[:, :, np.newaxis, np.newaxis],
+                    denormed.shape).copy()
+            denormed = denormed + era5_raw
+
+        score_ds[prediction_variable] = xr.DataArray(denormed,
                 dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
 
     def dump_metrics(self, title, metrics):

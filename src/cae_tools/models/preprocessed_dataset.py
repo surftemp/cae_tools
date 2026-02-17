@@ -55,6 +55,8 @@ class PreprocessedDataset(torch.utils.data.Dataset):
         else:
             self.normalisation_parameters = data['normalisation_parameters']
         
+        self.output_activation = self.normalisation_parameters.get('output_activation', 'sigmoid')
+        
         print(f"Loaded {self.n_samples} samples")
         print(f"Input shape: {self.inputs.shape}")
         print(f"Output shape: {self.outputs.shape}")
@@ -97,7 +99,12 @@ class PreprocessedDataset(torch.utils.data.Dataset):
         """Denormalize output back to original scale."""
         min_out = self.normalisation_parameters['min_output']
         max_out = self.normalisation_parameters['max_output']
-        return min_out + (arr * (max_out - min_out))
+        range_out = max_out - min_out
+        output_activation = self.normalisation_parameters.get('output_activation', 'sigmoid')
+        if output_activation == 'tanh':
+            return min_out + ((arr + 1) / 2) * range_out  # [-1,1] → physical
+        else:
+            return min_out + (arr * range_out)  # [0,1] → physical
     
     def __getitem__(self, index):
         label = f"image{index}"

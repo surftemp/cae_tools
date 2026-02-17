@@ -27,6 +27,7 @@ class DSDataset(torch.utils.data.Dataset):
         self.normalise_out = normalise_out
         self.input_spec = []
         self.output_spec = None
+        self.output_activation = 'sigmoid'  # default, overridden by set_normalisation_parameters
 
         self.input_das = [self.ds[input_variable_name] for input_variable_name in input_variable_names]
 
@@ -82,8 +83,10 @@ class DSDataset(torch.utils.data.Dataset):
             self.max_inputs = parameters['max_inputs']
             self.min_output = parameters['min_output']
             self.max_output = parameters['max_output']
+            self.output_activation = parameters.get('output_activation', 'sigmoid')
         else:
             (self.min_inputs, self.max_inputs, self.min_output, self.max_output) = tuple(parameters)
+            self.output_activation = 'sigmoid'
         print(self.min_inputs, self.max_inputs, self.min_output, self.max_output)
 
     def get_input_shape(self):
@@ -110,7 +113,11 @@ class DSDataset(torch.utils.data.Dataset):
 
     def normalise_output(self, arr):
         if self.normalise_out:
-            return (arr - self.min_output) / (self.max_output - self.min_output)
+            range_val = self.max_output - self.min_output
+            if getattr(self, 'output_activation', 'sigmoid') == 'tanh':
+                return 2 * (arr - self.min_output) / range_val - 1  # → [-1, 1]
+            else:
+                return (arr - self.min_output) / range_val  # → [0, 1]
         else:
             return arr
 
@@ -132,7 +139,11 @@ class DSDataset(torch.utils.data.Dataset):
 
     def denormalise_output(self, arr, force=False):
         if force or self.normalise_out:
-            return self.min_output + (arr * (self.max_output - self.min_output))
+            range_val = self.max_output - self.min_output
+            if getattr(self, 'output_activation', 'sigmoid') == 'tanh':
+                return self.min_output + ((arr + 1) / 2) * range_val  # [-1,1] → physical
+            else:
+                return self.min_output + (arr * range_val)  # [0,1] → physical
         else:
             return arr
 
