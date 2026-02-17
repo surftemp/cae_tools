@@ -1,0 +1,11 @@
+Loading training data...
+Type: <class 'dict'>
+Keys: ['inputs', 'outputs', 'normalisation_parameters', 'input_variables', 'output_variable', 'n_samples', 'normalized']
+  inputs: shape=torch.Size([103577, 12, 100, 100]), dtype=torch.float32
+  outputs: shape=torch.Size([103577, 1, 100, 100]), dtype=torch.float32
+  normalisation_parameters: type=<class 'dict'>
+  input_variables: list len=12
+  output_variable: type=<class 'str'>
+  n_samples: type=<class 'int'>
+  normalized: type=<class 'bool'>
+Done.

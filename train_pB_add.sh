@@ -1,21 +1,24 @@
 #!/bin/bash
 # =============================================================================
-# Experiment: CONV BOTTLENECK (proper UNET with conv bridge, no FC layers)
-# Same other hyperparameters as pB FC model for fair comparison
+# Experiment A: ADDITIVE SKIP CONNECTIONS
+# Tests whether concat+BN+ReLU in decoder suppresses ERA5 in skip channels.
+# Uses additive (true residual) skip connections instead of concatenation.
+# All other hyperparameters match baseline pB for fair comparison.
+# Requires pB_spec_add.json (halved decoder input channels)
 # =============================================================================
 
 nrEpochs=3500
 learningRate=0.001
 lambda_pearson=0.0005
 weight_decay=1e-5
-dropout_rate=0.1
+dropout_rate=0.3
 batchSize=512
 method="unet"
 checkpointInterval=500
 
 # ---- Paths ----
-layerDefinitionsPath="pB_spec.json"
-databasePath="database_pB_conv_noattn.db"
+layerDefinitionsPath="pB_spec_add.json"
+databasePath="database_pB_add_p3dropout.db"
 MODELS_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/models"
 
 # ---- Preprocessed data files ----
@@ -29,12 +32,13 @@ if [ ! -f "$trainFile" ] || [ ! -f "$testFile" ]; then
 fi
 
 hash=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 8 | head -n 1)
-modelFolder="${MODELS_DIR}/model_pB_conv_noattn_$hash"
+modelFolder="${MODELS_DIR}/model_pB_add_$hash"
 
 echo "=========================================="
-echo "Experiment: CONV BOTTLENECK"
+echo "Experiment A: ADDITIVE SKIP CONNECTIONS"
 echo "Model: $modelFolder"
 echo "Epochs: $nrEpochs"
+echo "Skip mode: add"
 echo "=========================================="
 
 train_cae \
@@ -52,8 +56,7 @@ train_cae \
     --layer-definitions-path="$layerDefinitionsPath" \
     --database-path="$databasePath" \
     --checkpoint-interval="$checkpointInterval" \
-    --bottleneck-type=conv \
-    --no-attention    
+    --skip-mode=add
 
 echo "=========================================="
 echo "Training complete: $modelFolder"

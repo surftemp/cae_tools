@@ -60,6 +60,14 @@ def main():
                         help="bottleneck type: 'fc' for FC bottleneck (default), 'conv' for fully convolutional UNET")
     parser.add_argument("--no-attention", action="store_true", default=False,
                         help="disable channel attention on skip connections")
+    parser.add_argument("--skip-mode", type=str, choices=["concat", "add"], default="concat",
+                        help="skip connection mode: 'concat' (default) or 'add' (true residual)")
+    parser.add_argument("--skip-dropout", type=float, default=0.0,
+                        help="probability of dropping entire skip connections during training (default: 0.0)")
+    parser.add_argument("--skip-scale", type=float, default=1.0,
+                        help="scale factor for skip connections (default: 1.0)")
+    parser.add_argument("--latent-activation", type=str, choices=["relu", "leaky_relu", "none"], default="relu",
+                        help="activation function for bottleneck FC layers (default: relu)")
 
     args = parser.parse_args()
 
@@ -102,7 +110,9 @@ def main():
                           lambda_pearson=args.lambda_pearson, database_path=args.database_path,
                           weight_decay=args.weight_decay, dropout_rate=args.dropout_rate,
                           checkpoint_interval=args.checkpoint_interval, bottleneck_type=args.bottleneck_type,
-                          use_attention=not args.no_attention)
+                          use_attention=not args.no_attention,
+                          skip_mode=args.skip_mode, skip_dropout=args.skip_dropout,
+                          skip_scale=args.skip_scale, latent_activation=args.latent_activation)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -197,7 +207,9 @@ def main():
                       lambda_pearson=args.lambda_pearson, database_path=args.database_path,
                       weight_decay=args.weight_decay, dropout_rate=args.dropout_rate,
                       checkpoint_interval=args.checkpoint_interval, bottleneck_type=args.bottleneck_type,
-                      use_attention=not args.no_attention)
+                      use_attention=not args.no_attention,
+                      skip_mode=args.skip_mode, skip_dropout=args.skip_dropout,
+                      skip_scale=args.skip_scale, latent_activation=args.latent_activation)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

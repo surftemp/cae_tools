@@ -8,9 +8,25 @@ Usage:
         --bad-box /path/to/model_inputs/2023-08-04/some_box_in_SE_england.nc \
         --good-box /path/to/model_inputs/2023-08-09/some_box_in_SE_england.nc
 
-To get the boxes, first regenerate inputs for a bad and good date:
-    prepare_scoring_dataset --grid-path ... --start-date 2023-08-04 --end-date 2023-08-04 --box-stride 50 --output-folder debug_inputs_bad
-    prepare_scoring_dataset --grid-path ... --start-date 2023-08-09 --end-date 2023-08-09 --box-stride 50 --output-folder debug_inputs_good
+To get the boxes, first regenerate inputs for a bad and good date
+:
+    prepare_scoring_dataset \
+        --grid-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK-GRID-100M-v1.0.nc \
+        --land-cover-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-LANDCOVER-MERGED-2023-fv1.1.nc \
+        --land-water-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-LANDWATER-MERGED-2023-fv1.1.nc \
+        --built-area-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-BUILTAREA-MERGED-2023-fv1.1.nc \
+        --elevation-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-ELEVATION-MERGED-2023-fv1.0.nc \
+        --start-date 2023-08-04 --end-date 2023-08-04 \
+        --box-stride 50 --output-folder debug_inputs_bad
+        
+    prepare_scoring_dataset \
+        --grid-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK-GRID-100M-v1.0.nc \
+        --land-cover-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-LANDCOVER-MERGED-2023-fv1.1.nc \
+        --land-water-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-LANDWATER-MERGED-2023-fv1.1.nc \
+        --built-area-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-BUILTAREA-MERGED-2023-fv1.1.nc \
+        --elevation-path /gws/nopw/j04/eocis_chuk/shaerdan/EOCIS-CHUK_GEOSPATIAL_INFORMATION-L4-ELEVATION-MERGED-2023-fv1.0.nc \
+        --start-date 2023-08-09 --end-date 2023-08-09 \
+        --box-stride 50 --output-folder debug_inputs_good
 
 Then pick a box from the SE England region (eastings ~500000-600000, northings ~150000-250000).
 """
