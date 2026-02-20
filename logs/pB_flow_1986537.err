@@ -4,3 +4,4 @@
   warnings.warn(
 /gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG19_Weights.IMAGENET1K_V1`. You can also use `weights=VGG19_Weights.DEFAULT` to get the most up-to-date weights.
   warnings.warn(msg)
+slurmstepd: error: *** JOB 1986537 ON gpuhost004 CANCELLED AT 2026-02-20T18:45:28 DUE TO TIME LIMIT ***

@@ -30,8 +30,8 @@ MODELS_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/models"
 
 # ---- Preprocessed data files ----
 PREPROCESSED_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8"
-trainFile="${PREPROCESSED_DIR}/train_v8.pt"
-testFile="${PREPROCESSED_DIR}/test_v8.pt"
+trainFile="${PREPROCESSED_DIR}/train_v8_clean.pt"
+testFile="${PREPROCESSED_DIR}/test_v8_clean.pt"
 
 if [ ! -f "$trainFile" ] || [ ! -f "$testFile" ]; then
     echo "Error: Preprocessed data not found in $PREPROCESSED_DIR"

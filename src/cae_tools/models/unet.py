@@ -292,7 +292,7 @@ class UNET(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
                  lr=0.001, weight_decay=1e-5, dropout_rate=0.1, use_gpu=True, conv_kernel_size=3, conv_stride=2,
-                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1,
+                 conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=0,
                  checkpoint_interval=None, bottleneck_type='fc', use_attention=True,
                  skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu',
                  output_activation='sigmoid', predict_delta=False, delta_reference_channel=None,
@@ -1128,7 +1128,8 @@ class UNET(BaseModel):
             self.flow_steps = parameters.get("flow_steps", 4)
             self.augment = parameters.get("augment", False)
             self.slope_direction_channel = parameters.get("slope_direction_channel", 7)
-
+            self.lambda_pearson = parameters.get("lambda_pearson", 0)
+            
         use_fc = (self.bottleneck_type == 'fc')
 
         history_path = os.path.join(from_folder, "history.json")

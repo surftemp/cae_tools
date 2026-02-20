@@ -1,0 +1,91 @@
+==========================================
+Job ID: 2172693
+Node: gpuhost003
+Start time: Fri 20 Feb 10:47:30 GMT 2026
+Working dir: /home/users/shaerdan/cae_tools_pB
+==========================================
+Fri Feb 20 10:47:30 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 590.48.01              Driver Version: 590.48.01      CUDA Version: 13.1     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA A100-SXM4-40GB          On  |   00000000:41:00.0 Off |                    0 |
+| N/A   33C    P0             54W /  400W |       0MiB /  40960MiB |      0%      Default |
+|                                         |                        |             Disabled |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+===========================================
+Experiment: FLOW MATCHING UNET
+Model: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_mnWT5LUr
+Epochs: 3500
+Architecture: flow_matching
+Base channels: 64
+Flow steps: 4
+Augmentation: ON
+===========================================
+Loading preprocessed data...
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt...
+Loaded 103577 samples
+Input shape: torch.Size([103577, 12, 100, 100])
+Output shape: torch.Size([103577, 1, 100, 100])
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8.pt...
+Loaded 9001 samples
+Input shape: torch.Size([9001, 12, 100, 100])
+Output shape: torch.Size([9001, 1, 100, 100])
+Training cases: 103577, Test cases: 9001
+Input shape: (12, 100, 100), Output shape: (1, 100, 100)
+Flow Matching UNet: 14,887,323 parameters
+Inference steps: 4
+Running on device: cuda
+epoch: 0, train_velocity_mse: 0.122954, test_velocity_mse: 0.032372, test_output_mse: 0.004609, test_pearson_loss: 0.7417
+learn rate: 0.000300
+epoch: 10, train_velocity_mse: 0.016657, test_velocity_mse: 0.016251, test_output_mse: 0.001916, test_pearson_loss: 0.5975
+learn rate: 0.000300
+epoch: 20, train_velocity_mse: 0.014739, test_velocity_mse: 0.014473, test_output_mse: 0.001625, test_pearson_loss: 0.5023
+learn rate: 0.000300
+epoch: 30, train_velocity_mse: 0.014370, test_velocity_mse: 0.014037, test_output_mse: 0.001396, test_pearson_loss: 0.5130
+learn rate: 0.000300
+epoch: 40, train_velocity_mse: 0.013692, test_velocity_mse: 0.012976, test_output_mse: 0.002358, test_pearson_loss: 0.4701
+learn rate: 0.000300
+epoch: 50, train_velocity_mse: 0.013067, test_velocity_mse: 0.011632, test_output_mse: 0.001502, test_pearson_loss: 0.4404
+learn rate: 0.000300
+epoch: 60, train_velocity_mse: 0.012796, test_velocity_mse: 0.013273, test_output_mse: 0.002072, test_pearson_loss: 0.4448
+learn rate: 0.000300
+epoch: 70, train_velocity_mse: 0.012728, test_velocity_mse: 0.012007, test_output_mse: 0.001483, test_pearson_loss: 0.4495
+learn rate: 0.000300
+epoch: 80, train_velocity_mse: 0.012417, test_velocity_mse: 0.010845, test_output_mse: 0.001364, test_pearson_loss: 0.4548
+learn rate: 0.000300
+epoch: 90, train_velocity_mse: 0.012248, test_velocity_mse: 0.014198, test_output_mse: 0.003169, test_pearson_loss: 0.4516
+learn rate: 0.000300
+epoch: 100, train_velocity_mse: 0.012157, test_velocity_mse: 0.013047, test_output_mse: 0.001686, test_pearson_loss: 0.4757
+learn rate: 0.000299
+epoch: 110, train_velocity_mse: 0.011991, test_velocity_mse: 0.011940, test_output_mse: 0.001451, test_pearson_loss: 0.4427
+learn rate: 0.000299
+epoch: 120, train_velocity_mse: 0.011676, test_velocity_mse: 0.011209, test_output_mse: 0.001369, test_pearson_loss: 0.4681
+learn rate: 0.000299
+epoch: 130, train_velocity_mse: 0.011508, test_velocity_mse: 0.010683, test_output_mse: 0.001289, test_pearson_loss: 0.4113
+learn rate: 0.000299
+epoch: 140, train_velocity_mse: 0.011674, test_velocity_mse: 0.011096, test_output_mse: 0.001899, test_pearson_loss: 0.4060
+learn rate: 0.000299
+epoch: 150, train_velocity_mse: 0.011474, test_velocity_mse: 0.012578, test_output_mse: 0.001319, test_pearson_loss: 0.4156
+learn rate: 0.000299
+epoch: 160, train_velocity_mse: 0.011637, test_velocity_mse: 0.011525, test_output_mse: 0.001520, test_pearson_loss: 0.4139
+learn rate: 0.000298
+epoch: 170, train_velocity_mse: 0.011096, test_velocity_mse: 0.011240, test_output_mse: 0.001205, test_pearson_loss: 0.4049
+learn rate: 0.000298
+epoch: 180, train_velocity_mse: 0.011630, test_velocity_mse: 0.010303, test_output_mse: 0.001285, test_pearson_loss: 0.4060
+learn rate: 0.000298
+epoch: 190, train_velocity_mse: 0.011350, test_velocity_mse: 0.010818, test_output_mse: 0.001204, test_pearson_loss: 0.4165
+learn rate: 0.000298
+epoch: 200, train_velocity_mse: 0.011015, test_velocity_mse: 0.011363, test_output_mse: 0.001129, test_pearson_loss: 0.3909
+learn rate: 0.000298

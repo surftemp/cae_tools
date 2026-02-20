@@ -119,6 +119,7 @@ def main():
             mt.lr = args.learning_rate
             mt.batch_size = args.batch_size
             mt.checkpoint_interval = args.checkpoint_interval
+            mt.lambda_pearson = args.lambda_pearson
         else:
             if args.method == "unet":
                 mt = UNET(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,
@@ -222,6 +223,7 @@ def main():
         mt.lr = args.learning_rate
         mt.batch_size = args.batch_size
         mt.checkpoint_interval = args.checkpoint_interval
+        mt.lambda_pearson = args.lambda_pearson
     else:
         if args.method == "unet":
             mt = UNET(fc_size=args.fc_size, encoded_dim_size=args.latent_size, nr_epochs=args.nr_epochs,

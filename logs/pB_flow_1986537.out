@@ -109,3 +109,35 @@ epoch: 290, train_velocity_mse: 0.010668, test_output_mse: 0.001069, test_pearso
 learn rate: 0.000295
 epoch: 300, train_velocity_mse: 0.010952, test_output_mse: 0.001109, test_pearson_loss: 0.4011
 learn rate: 0.000295
+epoch: 310, train_velocity_mse: 0.010836, test_output_mse: 0.001097, test_pearson_loss: 0.3921
+learn rate: 0.000294
+epoch: 320, train_velocity_mse: 0.010812, test_output_mse: 0.001025, test_pearson_loss: 0.3704
+learn rate: 0.000294
+epoch: 330, train_velocity_mse: 0.010854, test_output_mse: 0.000978, test_pearson_loss: 0.3720
+learn rate: 0.000294
+epoch: 340, train_velocity_mse: 0.010716, test_output_mse: 0.000962, test_pearson_loss: 0.3762
+learn rate: 0.000293
+epoch: 350, train_velocity_mse: 0.010502, test_output_mse: 0.000961, test_pearson_loss: 0.3803
+learn rate: 0.000293
+epoch: 360, train_velocity_mse: 0.010917, test_output_mse: 0.001015, test_pearson_loss: 0.4004
+learn rate: 0.000292
+epoch: 370, train_velocity_mse: 0.010608, test_output_mse: 0.000880, test_pearson_loss: 0.3771
+learn rate: 0.000292
+epoch: 380, train_velocity_mse: 0.010836, test_output_mse: 0.001521, test_pearson_loss: 0.3892
+learn rate: 0.000292
+epoch: 390, train_velocity_mse: 0.010844, test_output_mse: 0.000918, test_pearson_loss: 0.3780
+learn rate: 0.000291
+epoch: 400, train_velocity_mse: 0.010916, test_output_mse: 0.001046, test_pearson_loss: 0.3744
+learn rate: 0.000291
+epoch: 410, train_velocity_mse: 0.010600, test_output_mse: 0.000929, test_pearson_loss: 0.3788
+learn rate: 0.000290
+epoch: 420, train_velocity_mse: 0.010842, test_output_mse: 0.000900, test_pearson_loss: 0.3700
+learn rate: 0.000290
+epoch: 430, train_velocity_mse: 0.010637, test_output_mse: 0.001280, test_pearson_loss: 0.5680
+learn rate: 0.000289
+epoch: 440, train_velocity_mse: 0.010401, test_output_mse: 0.000934, test_pearson_loss: 0.3705
+learn rate: 0.000289
+epoch: 450, train_velocity_mse: 0.010622, test_output_mse: 0.000976, test_pearson_loss: 0.3700
+learn rate: 0.000288
+epoch: 460, train_velocity_mse: 0.010520, test_output_mse: 0.000979, test_pearson_loss: 0.3741
+learn rate: 0.000288
