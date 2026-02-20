@@ -3,6 +3,8 @@ from torch import nn
 from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch.optim as optim
+from cae_tools.models.standard_unet import StandardEncoder, StandardDecoder
+from cae_tools.models.flow_matching_unet import FlowMatchingUNet, flow_matching_loss, flow_matching_sample
 from torchvision import models
 import torch.nn.functional as F
 
@@ -192,6 +194,8 @@ class Decoder(nn.Module):
                 skip_idx += 1            
         if self.output_activation == 'tanh':
             x = torch.tanh(x)
+        elif self.output_activation == 'none':
+            pass  # no activation, unconstrained output
         else:
             x = torch.sigmoid(x)
         return x 
@@ -231,6 +235,59 @@ class VGGPerceptualLoss(nn.Module):
 
         return loss    
 
+
+def augment_batch(inputs, targets, slope_dir_channel=7):
+    """
+    Apply full D4 symmetry augmentation: random 90° rotation + random H-flip.
+    
+    This covers all 8 symmetries of a square (identity, 3 rotations, 2 flips, 
+    2 diagonal reflections), each with equal 1/8 probability.
+    
+    Only slope_direction (continuous azimuth, normalized from [-180°, 180°] to [0, 1])
+    needs correction. All other channels are pure spatial fields where rearranging
+    pixels preserves their values.
+    
+    Slope direction corrections (in normalized [0,1] space):
+    - 90° CCW rotation (k times): norm → (norm - k/4) % 1.0
+      (azimuth decreases by k*90° because grid north rotates)
+    - H-flip: norm → 1.0 - norm
+      (negates azimuth: east↔west)
+    
+    Args:
+        inputs: (B, C, H, W) tensor on device
+        targets: (B, 1, H, W) tensor on device  
+        slope_dir_channel: index of slope_direction channel (default 7, None to skip)
+    
+    Returns:
+        augmented (inputs, targets) tensors
+    """
+    B = inputs.shape[0]
+
+    # Step 1: Random 90° rotation — k ∈ {0, 1, 2, 3} per sample
+    k = torch.randint(0, 4, (B,), device=inputs.device)
+    for ki in range(1, 4):
+        mask = (k == ki)
+        if mask.any():
+            inputs[mask] = torch.rot90(inputs[mask], ki, [-2, -1])
+            targets[mask] = torch.rot90(targets[mask], ki, [-2, -1])
+            # Correct slope_direction: azimuth rotates by -ki*90°
+            # In normalized space: norm → (norm - ki/4) % 1.0
+            if slope_dir_channel is not None and slope_dir_channel < inputs.shape[1]:
+                sd = inputs[mask, slope_dir_channel, :, :]
+                inputs[mask, slope_dir_channel, :, :] = (sd - ki * 0.25) % 1.0
+
+    # Step 2: Random H-flip (per-sample)
+    h_mask = torch.rand(B, device=inputs.device) < 0.5
+    if h_mask.any():
+        inputs[h_mask] = inputs[h_mask].flip(-1)
+        targets[h_mask] = targets[h_mask].flip(-1)
+        # Correct slope_direction: azimuth → -azimuth → norm: 1.0 - norm
+        if slope_dir_channel is not None and slope_dir_channel < inputs.shape[1]:
+            inputs[h_mask, slope_dir_channel, :, :] = 1.0 - inputs[h_mask, slope_dir_channel, :, :]
+
+    return inputs, targets
+
+
 class UNET(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
@@ -238,7 +295,9 @@ class UNET(BaseModel):
                  conv_input_layer_count=None, conv_output_layer_count=None, database_path=None, lambda_l1=0.001, lambda_pearson=1,
                  checkpoint_interval=None, bottleneck_type='fc', use_attention=True,
                  skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu',
-                 output_activation='sigmoid', predict_delta=False, delta_reference_channel=None):
+                 output_activation='sigmoid', predict_delta=False, delta_reference_channel=None,
+                 architecture='legacy', base_channels=64, flow_steps=4,
+                 augment=False, slope_direction_channel=7):
         """
         Create a convolutional autoencoder general model
 
@@ -298,6 +357,12 @@ class UNET(BaseModel):
         self.output_activation = output_activation
         self.predict_delta = predict_delta
         self.delta_reference_channel = delta_reference_channel
+        self.architecture = architecture
+        self.base_channels = base_channels
+        self.flow_steps = flow_steps
+        self.flow_model = None
+        self.augment = augment
+        self.slope_direction_channel = slope_direction_channel
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
         self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
@@ -330,6 +395,11 @@ class UNET(BaseModel):
             "output_activation": self.output_activation,
             "predict_delta": self.predict_delta,
             "delta_reference_channel": self.delta_reference_channel,
+            "architecture": self.architecture,
+            "base_channels": self.base_channels,
+            "flow_steps": self.flow_steps,
+            "augment": self.augment,
+            "slope_direction_channel": self.slope_direction_channel,
             "model_id": self.get_model_id()
         }
 
@@ -386,6 +456,7 @@ class UNET(BaseModel):
             
             combined_loss = mse_loss + lambda_pearson * pearson_loss #+ 0.1*bias_loss
             combined_loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()), max_norm=1.0)
             self.optim.step()
             train_loss.append(mse_loss.item())
             train_pearson_loss.append(pearson_loss.item())
@@ -414,6 +485,11 @@ class UNET(BaseModel):
             low_res = low_res.to(device)
             high_res = high_res.to(device)
 
+            # Apply augmentation (H-flip, V-flip with slope_direction correction)
+            if self.augment:
+                low_res, high_res = augment_batch(low_res.clone(), high_res.clone(), 
+                                                   slope_dir_channel=self.slope_direction_channel)
+
             self.optim.zero_grad()
             encoded_data, skip = self.encoder(low_res)
             decoded_data = self.decoder(encoded_data, skip)
@@ -424,6 +500,7 @@ class UNET(BaseModel):
 
             combined_loss = mse_loss + lambda_pearson * pearson_loss
             combined_loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()), max_norm=1.0)      
             self.optim.step()
             train_loss.append(mse_loss.item())
             train_pearson_loss.append(pearson_loss.item())
@@ -462,6 +539,77 @@ class UNET(BaseModel):
         mean_bias_loss = 0
         return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss)
 
+    def __train_epoch_flow_matching(self, data_loader, device):
+        """Train epoch for flow matching: predict velocity field."""
+        self.flow_model.train()
+        train_loss = []
+
+        for i, (conditioning, target, labels) in enumerate(data_loader):
+            conditioning = conditioning.to(device)  # (B, 12, H, W)
+            target = target.to(device)              # (B, 1, H, W)
+
+            # Apply augmentation (H-flip, V-flip with slope_direction correction)
+            if self.augment:
+                conditioning, target = augment_batch(conditioning.clone(), target.clone(),
+                                                      slope_dir_channel=self.slope_direction_channel)
+
+            self.optim.zero_grad()
+            loss = flow_matching_loss(self.flow_model, conditioning, target, device=device)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.flow_model.parameters(), max_norm=1.0)
+            self.optim.step()
+            train_loss.append(loss.item())
+
+        return float(np.mean(train_loss)), 0.0, 0.0, 0.0
+
+    def __test_epoch_flow_matching(self, data_loader, device, save_arr=None):
+        """Test epoch for flow matching: run Euler integration and compute metrics on output."""
+        self.flow_model.eval()
+        test_loss = []
+        test_pearson_loss = []
+        test_velocity_loss = []
+
+        with torch.no_grad():
+            ctr = 0
+            for (conditioning, target, labels) in data_loader:
+                conditioning = conditioning.to(device)
+                target = target.to(device)
+                B = conditioning.shape[0]
+
+                # Compute velocity MSE (same way as training for comparison)
+                t = torch.rand(B, device=device)
+                noise = torch.randn_like(target)
+                t_expand = t[:, None, None, None]
+                x_t = (1.0 - t_expand) * noise + t_expand * target
+                velocity_target = target - noise
+                velocity_pred = self.flow_model(x_t, conditioning, t)
+                test_velocity_loss.append(F.mse_loss(velocity_pred, velocity_target).item())
+                
+                # Run inference: Euler integration from noise to prediction
+                target_shape = (B, target.shape[1], target.shape[2], target.shape[3])
+                predicted = flow_matching_sample(
+                    self.flow_model, conditioning, target_shape,
+                    num_steps=self.flow_steps, device=device
+                )
+
+                # MSE on final output (not velocity)
+                loss = self.loss_fn(predicted, target)
+                test_loss.append(loss.item())
+
+                # Pearson correlation on final output
+                pearson_corr = self.pearson_corr_torch(predicted, target)
+                pearson_loss = 1 - torch.mean(pearson_corr)
+                test_pearson_loss.append(pearson_loss.item())
+
+                if save_arr is not None:
+                    save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
+                ctr += B
+
+        mean_loss = np.mean(test_loss)
+        mean_pearson_loss = np.mean(test_pearson_loss)
+        mean_velocity_loss = np.mean(test_velocity_loss)
+        return float(mean_loss), float(mean_pearson_loss), float(mean_velocity_loss)
+
     def __test_epoch(self, batches, device, save_arr=None):
         test_loss = []
         test_pearson_loss=[]
@@ -498,15 +646,30 @@ class UNET(BaseModel):
         return float(mean_loss), float(mean_pearson_loss),float(mean_bias_loss)
 
     def score(self, batches, save_arr):
-        self.encoder.eval()
-        self.decoder.eval()
-        with torch.no_grad():  # No need to track the gradients
-            ctr = 0
-            for input_data in batches:
-                encoded_data, skip = self.encoder(input_data)
-                decoded_data = self.decoder(encoded_data, skip)
-                save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
-                ctr += self.batch_size
+        if self.architecture == 'flow_matching':
+            self.flow_model.eval()
+            device = next(self.flow_model.parameters()).device
+            with torch.no_grad():
+                ctr = 0
+                for conditioning in batches:
+                    B = conditioning.shape[0]
+                    target_shape = (B, self.output_shape[0], self.output_shape[1], self.output_shape[2])
+                    predicted = flow_matching_sample(
+                        self.flow_model, conditioning, target_shape,
+                        num_steps=self.flow_steps, device=device
+                    )
+                    save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
+                    ctr += B
+        else:
+            self.encoder.eval()
+            self.decoder.eval()
+            with torch.no_grad():
+                ctr = 0
+                for input_data in batches:
+                    encoded_data, skip = self.encoder(input_data)
+                    decoded_data = self.decoder(encoded_data, skip)
+                    save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
+                    ctr += self.batch_size
 
     def get_lr(self, optimizer):
         for param_group in optimizer.param_groups:
@@ -536,9 +699,15 @@ class UNET(BaseModel):
 
         use_fc = (self.bottleneck_type == 'fc')
         if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
+            if self.architecture == 'standard':
+                self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+            else:
+                self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
         if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
+            if self.architecture == 'standard':
+                self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation)
+            else:
+                self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 #         if not self.discriminator:
 #             self.discriminator = Discriminator(output_chan)  # Ensure discriminator input channels match output image channels
         
@@ -578,8 +747,9 @@ class UNET(BaseModel):
 #         self.discriminator.to(device)
 
         self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        T_max=500
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
+        T_max=self.nr_epochs
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-5)
+        self._scheduler = scheduler
 
         # Keep batches on CPU, move to GPU per-batch to avoid VRAM OOM
         train_batches = [(low_res, high_res, labels) for low_res, high_res, labels in train_loader]
@@ -690,10 +860,25 @@ class UNET(BaseModel):
                                  input_layer_count=self.conv_input_layer_count, output_layer_count=self.conv_output_layer_count)
 
         use_fc = (self.bottleneck_type == 'fc')
-        if not self.encoder:
-            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
-        if not self.decoder:
-            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
+        if self.architecture == 'flow_matching':
+            if not self.flow_model:
+                self.flow_model = FlowMatchingUNet(
+                    cond_channels=input_chan, target_channels=output_chan,
+                    base_channels=self.base_channels, dropout_rate=self.dropout_rate
+                )
+                print(f"Flow Matching UNet: {sum(p.numel() for p in self.flow_model.parameters()):,} parameters")
+                print(f"Inference steps: {self.flow_steps}")
+        else:
+            if not self.encoder:
+                if self.architecture == 'standard':
+                    self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+                else:
+                    self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
+            if not self.decoder:
+                if self.architecture == 'standard':
+                    self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation)
+                else:
+                    self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 
         train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
@@ -708,27 +893,56 @@ class UNET(BaseModel):
         start = time.time()
 
         self.loss_fn = torch.nn.MSELoss()
-        self.encoder.to(device)
-        self.decoder.to(device)
 
-        self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        T_max = 500
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-3)
+        if self.architecture == 'flow_matching':
+            self.flow_model.to(device)
+            self.optim = torch.optim.AdamW(self.flow_model.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        else:
+            self.encoder.to(device)
+            self.decoder.to(device)
+            self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
+
+        T_max = self.nr_epochs
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-5)
+        self._scheduler = scheduler  # store reference so save() can access it
+
+        # Restore optimizer state if available (for training continuation)
+        if hasattr(self, '_saved_optimizer_state_path') and self._saved_optimizer_state_path:
+            print(f"Restoring optimizer state from {self._saved_optimizer_state_path}...")
+            optimizer_state = torch.load(self._saved_optimizer_state_path, map_location=device)
+            self.optim.load_state_dict(optimizer_state)
+            self._saved_optimizer_state_path = None
+
+        # Restore scheduler state if available (for training continuation)
+        if hasattr(self, '_saved_scheduler_state_path') and self._saved_scheduler_state_path:
+            print(f"Restoring scheduler state from {self._saved_scheduler_state_path}...")
+            scheduler_state = torch.load(self._saved_scheduler_state_path, map_location=device)
+            scheduler.load_state_dict(scheduler_state)
+            self._saved_scheduler_state_path = None
 
         # No batch preloading needed - PreprocessedDataset.__getitem__ is fast (just tensor slicing)
         # DataLoader iterates directly over the in-memory tensors
 
         try:
             for epoch in range(self.nr_epochs):
-                train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
+                if self.architecture == 'flow_matching':
+                    train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_flow_matching(train_loader, device)
+                else:
+                    train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
                 if epoch < T_max:
                     scheduler.step()
                 if epoch % self.test_interval == 0:
-                    test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_from_loader(test_loader, device)
+                    if self.architecture == 'flow_matching':
+                        test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_flow_matching(test_loader, device)
+                    else:
+                        test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_from_loader(test_loader, device)
                     lr = self.get_lr(self.optim)
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
-                    print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
+                    if self.architecture == 'flow_matching':
+                        print(f"epoch: {epoch}, train_velocity_mse: {train_loss:.6f}, test_velocity_mse: {test_bias_loss:.6f}, test_output_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
+                    else:
+                        print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
                     print(f"learn rate: {lr:.6f}")
                 
                 # Save checkpoint every N epochs
@@ -785,7 +999,27 @@ class UNET(BaseModel):
         """
         Print a summary of the encoder/input and decoder/output layers
         """
-        if self.spec:
+        if self.architecture == 'flow_matching' and self.flow_model is not None:
+            n_params = sum(p.numel() for p in self.flow_model.parameters())
+            s = f"Flow Matching UNet Summary:\n"
+            s += f"\tArchitecture: flow_matching\n"
+            s += f"\tBase channels: {self.base_channels}\n"
+            s += f"\tInference steps: {self.flow_steps}\n"
+            s += f"\tTotal parameters: {n_params:,}\n"
+            s += f"\tInput shape: {self.input_shape}\n"
+            s += f"\tOutput shape: {self.output_shape}\n"
+            return s
+        elif self.architecture == 'standard' and self.encoder is not None:
+            n_enc = sum(p.numel() for p in self.encoder.parameters())
+            n_dec = sum(p.numel() for p in self.decoder.parameters())
+            s = f"Standard Residual UNet Summary:\n"
+            s += f"\tArchitecture: standard\n"
+            s += f"\tBase channels: {self.base_channels}\n"
+            s += f"\tEncoder parameters: {n_enc:,}\n"
+            s += f"\tDecoder parameters: {n_dec:,}\n"
+            s += f"\tTotal parameters: {n_enc + n_dec:,}\n"
+            return s
+        elif self.spec:
             s = "Model Summary:\n"
             for input_spec in self.spec.input_layers:
                 s += str(input_spec)
@@ -808,10 +1042,26 @@ class UNET(BaseModel):
         :param to_folder: folder to which model files are to be saved
         """
         os.makedirs(to_folder, exist_ok=True)
-        encoder_path = os.path.join(to_folder, "encoder.weights")
-        torch.save(self.encoder.state_dict(), encoder_path)
-        decoder_path = os.path.join(to_folder, "decoder.weights")
-        torch.save(self.decoder.state_dict(), decoder_path)
+
+        if self.architecture == 'flow_matching':
+            flow_model_path = os.path.join(to_folder, "flow_model.weights")
+            torch.save(self.flow_model.state_dict(), flow_model_path)
+        else:
+            encoder_path = os.path.join(to_folder, "encoder.weights")
+            torch.save(self.encoder.state_dict(), encoder_path)
+            decoder_path = os.path.join(to_folder, "decoder.weights")
+            torch.save(self.decoder.state_dict(), decoder_path)
+
+        # Save optimizer state for proper training continuation
+        if self.optim is not None:
+            optimizer_path = os.path.join(to_folder, "optimizer.state")
+            torch.save(self.optim.state_dict(), optimizer_path)
+
+        # Save scheduler state if available
+        if hasattr(self, '_scheduler') and self._scheduler is not None:
+            scheduler_path = os.path.join(to_folder, "scheduler.state")
+            torch.save(self._scheduler.state_dict(), scheduler_path)
+
         normalisation_path = os.path.join(to_folder, "normalisation.weights")
         with open(normalisation_path, "w") as f:
             f.write(json.dumps(self.normalisation_parameters))
@@ -873,6 +1123,11 @@ class UNET(BaseModel):
             self.output_activation = parameters.get("output_activation", "sigmoid")
             self.predict_delta = parameters.get("predict_delta", False)
             self.delta_reference_channel = parameters.get("delta_reference_channel", None)
+            self.architecture = parameters.get("architecture", "legacy")
+            self.base_channels = parameters.get("base_channels", 64)
+            self.flow_steps = parameters.get("flow_steps", 4)
+            self.augment = parameters.get("augment", False)
+            self.slope_direction_channel = parameters.get("slope_direction_channel", 7)
 
         use_fc = (self.bottleneck_type == 'fc')
 
@@ -885,17 +1140,55 @@ class UNET(BaseModel):
             self.spec = ModelSpec()
             self.spec.load(json.loads(f.read()))
 
-        self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
-        self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
+        self.encoder = None
+        self.decoder = None
+        self.flow_model = None
 
-        encoder_path = os.path.join(from_folder, "encoder.weights")
+        if self.architecture == 'flow_matching':
+            input_chan = self.input_shape[0]
+            output_chan = self.output_shape[0]
+            self.flow_model = FlowMatchingUNet(
+                cond_channels=input_chan, target_channels=output_chan,
+                base_channels=self.base_channels, dropout_rate=self.dropout_rate
+            )
+            flow_model_path = os.path.join(from_folder, "flow_model.weights")
+            self.flow_model.load_state_dict(self.torch_load(flow_model_path))
+            self.flow_model.eval()
+        elif self.architecture == 'standard':
+            input_chan = self.input_shape[0]
+            output_chan = self.output_shape[0]
+            self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+            self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation)
+        else:
+            self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
+            self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
+
+        if self.architecture != 'flow_matching':
+            encoder_path = os.path.join(from_folder, "encoder.weights")
 #         self.encoder.load_state_dict(torch.load(encoder_path))
-        self.encoder.load_state_dict(self.torch_load(encoder_path))
-        self.encoder.eval()
-        decoder_path = os.path.join(from_folder, "decoder.weights")
+            self.encoder.load_state_dict(self.torch_load(encoder_path))
+            self.encoder.eval()
+            decoder_path = os.path.join(from_folder, "decoder.weights")
 #         self.decoder.load_state_dict(torch.load(decoder_path))
-        self.decoder.load_state_dict(self.torch_load(decoder_path))
-        self.decoder.eval()
+            self.decoder.load_state_dict(self.torch_load(decoder_path))
+            self.decoder.eval()
+
+        # Store optimizer/scheduler state paths for deferred restoration during training continuation
+        # (Can't restore now because optimizer/scheduler don't exist yet — they're created in train_from_datasets)
+        optimizer_path = os.path.join(from_folder, "optimizer.state")
+        if os.path.exists(optimizer_path):
+            self._saved_optimizer_state_path = optimizer_path
+            print(f"Found saved optimizer state at {optimizer_path}")
+        else:
+            self._saved_optimizer_state_path = None
+
+        scheduler_path = os.path.join(from_folder, "scheduler.state")
+        if os.path.exists(scheduler_path):
+            self._saved_scheduler_state_path = scheduler_path
+            print(f"Found saved scheduler state at {scheduler_path}")
+        else:
+            self._saved_scheduler_state_path = None
+
         super().load(from_folder)
 
     def pearson_corr_torch(self, decoded_data, high_res):

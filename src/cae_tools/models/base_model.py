@@ -71,10 +71,12 @@ class BaseModel:
 
         # common code across the models to collect metrics
 
-        if hasattr(self,"encoder"):
+        if hasattr(self,"encoder") and self.encoder is not None:
             self.encoder.to(device)
-        if hasattr(self,"decoder"):
+        if hasattr(self,"decoder") and self.decoder is not None:
             self.decoder.to(device)
+        if hasattr(self,"flow_model") and self.flow_model is not None:
+            self.flow_model.to(device)
         if hasattr(self,"vae"):
             self.vae.to(device)
         if hasattr(self,"unet_res"):
@@ -137,10 +139,12 @@ class BaseModel:
         else:
             device = torch.device("cpu")
             
-        if hasattr(self,"encoder"):
+        if hasattr(self,"encoder") and self.encoder is not None:
             self.encoder.to(device)
-        if hasattr(self,"decoder"):
+        if hasattr(self,"decoder") and self.decoder is not None:
             self.decoder.to(device)
+        if hasattr(self,"flow_model") and self.flow_model is not None:
+            self.flow_model.to(device)
         if hasattr(self,"vae"):
             self.vae.to(device)
         if hasattr(self,"unet_res"):

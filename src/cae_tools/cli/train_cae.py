@@ -68,12 +68,22 @@ def main():
                         help="scale factor for skip connections (default: 1.0)")
     parser.add_argument("--latent-activation", type=str, choices=["relu", "leaky_relu", "none"], default="relu",
                         help="activation function for bottleneck FC layers (default: relu)")
-    parser.add_argument("--output-activation", type=str, choices=["sigmoid", "tanh"], default="sigmoid",
-                        help="output activation: sigmoid for [0,1], tanh for [-1,1] (default: sigmoid)")
+    parser.add_argument("--output-activation", type=str, choices=["sigmoid", "tanh", "none"], default="sigmoid",
+                        help="output activation: sigmoid for [0,1], tanh for [-1,1], none for unconstrained (default: sigmoid)")
     parser.add_argument("--predict-delta", action="store_true", default=False,
                         help="model predicts delta (LST - ERA5); apply_cae adds ERA5 back for physical LST")
     parser.add_argument("--delta-reference-channel", type=str, default=None,
                         help="input variable name used as reference for delta prediction (e.g. era5_skt)")
+    parser.add_argument("--architecture", type=str, choices=["legacy", "standard", "flow_matching"], default="legacy",
+                        help="UNet architecture: 'legacy' (original), 'standard' (residual blocks, GroupNorm, bilinear upsample), 'flow_matching' (conditional flow matching)")
+    parser.add_argument("--base-channels", type=int, default=64,
+                        help="base channel count for standard/flow_matching architecture (default: 64, doubles each stage)")
+    parser.add_argument("--flow-steps", type=int, default=4,
+                        help="number of Euler integration steps for flow matching inference (default: 4)")
+    parser.add_argument("--augment", action="store_true", default=False,
+                        help="enable data augmentation (random H/V flips with slope_direction correction)")
+    parser.add_argument("--slope-direction-channel", type=int, default=7,
+                        help="index of slope_direction channel for augmentation correction (default: 7)")
 
     args = parser.parse_args()
 
@@ -121,7 +131,10 @@ def main():
                           skip_scale=args.skip_scale, latent_activation=args.latent_activation,
                           output_activation=args.output_activation,
                           predict_delta=args.predict_delta,
-                          delta_reference_channel=args.delta_reference_channel)
+                          delta_reference_channel=args.delta_reference_channel,
+                          architecture=args.architecture, base_channels=args.base_channels,
+                          flow_steps=args.flow_steps,
+                          augment=args.augment, slope_direction_channel=args.slope_direction_channel)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -221,7 +234,10 @@ def main():
                       skip_scale=args.skip_scale, latent_activation=args.latent_activation,
                       output_activation=args.output_activation,
                       predict_delta=args.predict_delta,
-                      delta_reference_channel=args.delta_reference_channel)
+                      delta_reference_channel=args.delta_reference_channel,
+                      architecture=args.architecture, base_channels=args.base_channels,
+                      flow_steps=args.flow_steps,
+                      augment=args.augment, slope_direction_channel=args.slope_direction_channel)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

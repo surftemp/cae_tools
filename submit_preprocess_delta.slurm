@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=preprocess_delta
-#SBATCH -o preprocess_delta.out
-#SBATCH -e preprocess_delta.err
+#SBATCH -o /home/users/shaerdan/cae_tools_pB/logs/preprocess_delta.out
+#SBATCH -e /home/users/shaerdan/cae_tools_pB/logs/preprocess_delta.err
 #SBATCH --mem=80G
 #SBATCH -t 4:00:00
 #SBATCH --account=eocis_chuk
@@ -24,7 +24,7 @@ PREPROCESSED_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8"
 TRAIN_NC_DIR="/gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/train"
 TEST_NC_DIR="/gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/test"
 
-INPUT_VARS="land_cover albedo elevation era5_skt sin_doy cos_doy slope_mag slope_dir urban suburban hot_pattern cold_pattern"
+INPUT_VARS="land_cover albedo_monthly_climatology_means elevation era5_skt sin_doy cos_doy slope_magnitude slope_direction urban_area suburban_area pixel_st_hot_pattern pixel_st_cold_pattern"
 OUTPUT_VAR="ST_slices"
 
 echo "=========================================="
