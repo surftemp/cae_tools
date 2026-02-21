@@ -34,6 +34,17 @@ Usage (test data - uses train stats):
                     --input-variables land_cover albedo elevation ... \
                     --output-variable ST_slices \
                     --use-norm-from train_preprocessed.pt
+
+# Z-score (recommended — season-agnostic, preserves hot extremes)
+preprocess_data ... --filter-cloud zscore --zscore-threshold -3.0
+
+# Threshold (what we used manually)
+preprocess_data ... --filter-cloud threshold \
+    --era5-warm-threshold 288 \
+    --delta-threshold-warm -10 \
+    --delta-threshold-cold -15
+
+                    
 """
 
 import argparse
