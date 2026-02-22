@@ -1,6 +1,10 @@
 ==========================================
-Step 1: Preprocess TRAINING data (delta + tanh)
+Job ID: 2521588
+Node: host1101
+Start time: Sun 22 Feb 11:41:54 GMT 2026
 ==========================================
+
+Step 1: Preprocessing training data (zscore filter)...
 Found 283 netCDF files
 Case dimension: box
 Spatial dimensions: 100 x 100
@@ -26,34 +30,38 @@ Loading data...
   Processed 260/283 files (92007/103577 boxes)
   Processed 280/283 files (103532/103577 boxes)
   Processed 283/283 files (103577/103577 boxes)
-Computing delta targets: ST_slices - era5_skt
-  Output range before delta: [250.26, 368.88]
-  ERA5 range: [269.33, 312.97]
-  Delta range: [-37.04, 68.80]
+
+Z-score filtering (delta = LST - ERA5):
+  Population: mean=3.56K, std=3.07K
+  Threshold: z < -3.0 => delta < -5.66K
+  Only cold outliers removed (z < threshold, warm extremes preserved)
+  Removed: 933 boxes (0.90%)
+  Remaining: 102644 boxes
+
 Computing normalization statistics...
   land_cover: [0.0000, 21.0000]
   albedo_monthly_climatology_means: [-0.0128, 3.0675]
   elevation: [-45.0426, 1263.7565]
   era5_skt: [269.3254, 312.9688]
-  sin_doy: [0.0257, 1.0000]
-  cos_doy: [-1.0000, 0.9987]
+  sin_doy: [0.0429, 1.0000]
+  cos_doy: [-1.0000, 0.9963]
   slope_magnitude: [0.0000, 1.9282]
   slope_direction: [-180.0000, 180.0000]
   urban_area: [0.0000, 1.0000]
   suburban_area: [0.0000, 1.0000]
-  pixel_st_hot_pattern: [272.7443, 341.2346]
+  pixel_st_hot_pattern: [279.7017, 341.2346]
   pixel_st_cold_pattern: [251.3834, 309.9614]
-  ST_slices: [-37.0417, 68.7964]
+  ST_slices: [261.4631, 368.8778]
 Normalizing data...
-  Output normalized to [-1, 1] (tanh mode)
-Saving to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_delta.pt...
-Done! Output file size: 53.86 GB
-Samples: 103577
+  Output normalized to [0, 1] (sigmoid mode)
+Saving to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore.pt...
+Done! Output file size: 53.37 GB
+Samples: 102644
+Metadata written to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore_meta.json
 
 NOTE: This file's normalisation_parameters should be used for test/validation data
-==========================================
-Step 2: Preprocess TEST data (using train stats)
-==========================================
+
+Step 2: Preprocessing test data (zscore filter using train stats)...
 Found 202 netCDF files
 Case dimension: box
 Spatial dimensions: 100 x 100
@@ -75,25 +83,29 @@ Loading data...
   Processed 180/202 files (7064/9001 boxes)
   Processed 200/202 files (8899/9001 boxes)
   Processed 202/202 files (9001/9001 boxes)
-Computing delta targets: ST_slices - era5_skt
-  Output range before delta: [252.86, 343.35]
-  ERA5 range: [274.66, 307.66]
-  Delta range: [-38.07, 47.42]
-Loading normalisation parameters from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_delta.pt...
+
+Z-score filtering (delta = LST - ERA5):
+  Using TRAINING distribution: mean=3.56K, std=3.07K
+  Threshold: z < -3.0 => delta < -5.66K
+  Only cold outliers removed (z < threshold, warm extremes preserved)
+  Removed: 269 boxes (2.99%)
+  Remaining: 8732 boxes
+
+Loading normalisation parameters from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore.pt...
 Using external normalisation parameters:
   land_cover: [0.0000, 21.0000]
   albedo_monthly_climatology_means: [-0.0128, 3.0675]
   elevation: [-45.0426, 1263.7565]
   era5_skt: [269.3254, 312.9688]
-  sin_doy: [0.0257, 1.0000]
-  cos_doy: [-1.0000, 0.9987]
+  sin_doy: [0.0429, 1.0000]
+  cos_doy: [-1.0000, 0.9963]
   slope_magnitude: [0.0000, 1.9282]
   slope_direction: [-180.0000, 180.0000]
   urban_area: [0.0000, 1.0000]
   suburban_area: [0.0000, 1.0000]
-  pixel_st_hot_pattern: [272.7443, 341.2346]
+  pixel_st_hot_pattern: [279.7017, 341.2346]
   pixel_st_cold_pattern: [251.3834, 309.9614]
-  ST_slices: [-37.0417, 68.7964]
+  ST_slices: [261.4631, 368.8778]
 This dataset's actual ranges (for reference):
   land_cover: [0.0000, 21.0000]
   albedo_monthly_climatology_means: [0.0145, 2.8215]
@@ -105,18 +117,34 @@ This dataset's actual ranges (for reference):
   slope_direction: [-180.0000, 179.9999]
   urban_area: [0.0000, 1.0000]
   suburban_area: [0.0000, 1.0000]
-  pixel_st_hot_pattern: [276.2529, 341.2346]
+  pixel_st_hot_pattern: [281.4927, 341.2346]
   pixel_st_cold_pattern: [259.9319, 308.6540]
-  ST_slices: [-38.0668, 47.4157]
+  ST_slices: [269.7962, 343.3452]
 Normalizing data...
-  Output normalized to [-1, 1] (tanh mode)
-Saving to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_delta.pt...
-Done! Output file size: 4.68 GB
-Samples: 9001
+  Output normalized to [0, 1] (sigmoid mode)
+Saving to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore.pt...
+Done! Output file size: 4.54 GB
+Samples: 8732
+Metadata written to /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore_meta.json
 
-NOTE: Data normalized using parameters from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_delta.pt
+NOTE: Data normalized using parameters from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore.pt
+
+Step 3: Preprocessing validation data (zscore filter using train stats)...
+Error: No netCDF files found
+
 ==========================================
-Done. Files:
-  /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_delta.pt
-  /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_delta.pt
+Preprocessing complete!
+
+Output files:
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk 4.3G Feb 20 21:19 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_clean.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk 4.4G Feb 17 20:59 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_delta.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk 4.4G Feb  2 16:04 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk 4.3G Feb 22 12:17 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk  50G Feb 20 21:18 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_clean.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk  51G Feb 17 20:54 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_delta.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk  51G Feb  2 15:58 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8.pt
+-rw-rw-r-- 1 shaerdan gws_eocis_chuk  50G Feb 22 12:13 /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore.pt
+
+IMPORTANT: All files are normalized using TRAINING data statistics.
+End time: Sun 22 Feb 12:17:39 GMT 2026
 ==========================================

@@ -4,7 +4,7 @@
 #SBATCH --account=orchid
 #SBATCH --qos=orchid
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=8
 #SBATCH --time=24:00:00
 #SBATCH --mem=80G
 #SBATCH --chdir=/home/users/shaerdan/cae_tools_pB

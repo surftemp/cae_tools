@@ -27,7 +27,10 @@ echo "Start time: $(date)"
 echo "=========================================="
 
 # Input variables (same as training)
-INPUT_VARS="land_cover albedo_monthly_climatology_means elevation era5_skt sin_doy cos_doy slope_magnitude slope_direction urban_area suburban_area pixel_st_hot_pattern pixel_st_cold_pattern"
+#INPUT_VARS="land_cover albedo_monthly_climatology_means elevation era5_skt sin_doy cos_doy slope_magnitude slope_direction urban_area suburban_area pixel_st_hot_pattern #pixel_st_cold_pattern"
+# Input variables (same as training)
+INPUT_VARS="land_cover elevation era5_skt sin_doy cos_doy slope_magnitude slope_direction urban_area suburban_area"
+
 
 # Output directory
 OUTPUT_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8"
@@ -37,40 +40,43 @@ mkdir -p $OUTPUT_DIR
 # Step 1: Preprocess Training Data (computes its own normalisation stats)
 # ============================================================================
 echo ""
-echo "Step 1: Preprocessing training data..."
-echo "       (Computing normalisation parameters from training data)"
+echo "Step 1: Preprocessing training data (zscore filter)..."
 preprocess_data \
     --input-files /gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/train/train_*.nc \
-    --output-file ${OUTPUT_DIR}/train_v8.pt \
-    --input-variables ${INPUT_VARS} \
-    --output-variable ST_slices
-
-# ============================================================================
-# Step 2: Preprocess Test Data (uses TRAIN normalisation stats)
-# ============================================================================
-echo ""
-echo "Step 2: Preprocessing test data..."
-echo "       (Using normalisation parameters from train_v8.pt)"
-preprocess_data \
-    --input-files /gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/test/test_*.nc \
-    --output-file ${OUTPUT_DIR}/test_v8.pt \
+    --output-file ${OUTPUT_DIR}/train_v8_zscore_nomonthly.pt \
     --input-variables ${INPUT_VARS} \
     --output-variable ST_slices \
-    --use-norm-from ${OUTPUT_DIR}/train_v8.pt
+    --filter-cloud zscore \
+    --zscore-threshold -3.0
 
 # ============================================================================
-# Step 3: Preprocess Validation Data (uses TRAIN normalisation stats)
+# Step 2: Preprocess Test Data (uses TRAIN normalisation stats + delta stats)
+# ============================================================================
+echo ""
+echo "Step 2: Preprocessing test data (zscore filter using train stats)..."
+preprocess_data \
+    --input-files /gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/test/test_*.nc \
+    --output-file ${OUTPUT_DIR}/test_v8_zscore_nomonthly.pt \
+    --input-variables ${INPUT_VARS} \
+    --output-variable ST_slices \
+    --use-norm-from ${OUTPUT_DIR}/train_v8_zscore_nomonthly.pt \
+    --filter-cloud zscore \
+    --zscore-threshold -3.0
+
+# ============================================================================
+# Step 3: Preprocess Validation Data (uses TRAIN normalisation stats + delta stats)
 # ============================================================================
 # Uncomment if you have a separate validation set
-# echo ""
-# echo "Step 3: Preprocessing validation data..."
-# echo "       (Using normalisation parameters from train_v8.pt)"
-# preprocess_data \
-#     --input-files /gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/val/val_*.nc \
-#     --output-file ${OUTPUT_DIR}/val_v8.pt \
-#     --input-variables ${INPUT_VARS} \
-#     --output-variable ST_slices \
-#     --use-norm-from ${OUTPUT_DIR}/train_v8.pt
+ echo ""
+ echo "Step 3: Preprocessing validation data (zscore filter using train stats)..."
+ preprocess_data \
+     --input-files /gws/nopw/j04/eocis_chuk/downscaling_full/10km_v8/val/val_*.nc \
+     --output-file ${OUTPUT_DIR}/val_v8_zscore_nomonthly.pt \
+     --input-variables ${INPUT_VARS} \
+     --output-variable ST_slices \
+     --use-norm-from ${OUTPUT_DIR}/train_v8_zscore_nomonthly.pt \
+     --filter-cloud zscore \
+     --zscore-threshold -3.0
 
 echo ""
 echo "=========================================="

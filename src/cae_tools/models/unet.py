@@ -14,6 +14,7 @@ import xarray as xr
 import json
 import os
 import time
+import signal
 
 from .base_model import BaseModel
 from .model_sizer import create_model_spec, ModelSpec
@@ -200,20 +201,6 @@ class Decoder(nn.Module):
             x = torch.sigmoid(x)
         return x 
 
-class VGGPerceptualLoss(nn.Module):
-    def __init__(self, layers=[0,5, 10, 19, 28], device='cuda'):
-        super(VGGPerceptualLoss, self).__init__()
-        vgg = models.vgg19(pretrained=True).features
-        self.layers = layers  # Select layers to use for perceptual loss
-        self.perceptual_encoder = nn.Sequential(*list(vgg)[:9]).to(device).eval()  # 
-        for param in self.perceptual_encoder.parameters():
-            param.requires_grad = False
-
-        self.resize_transform = transforms.Resize((224, 224))
-        self.normalize_transform = transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                                                        std=[0.229, 0.224, 0.225])
-        self.device = device
-
     def forward(self, predicted, ground_truth):
         predicted_3channel = predicted.repeat(1, 3, 1, 1)
         ground_truth_3channel = ground_truth.repeat(1, 3, 1, 1)
@@ -365,7 +352,6 @@ class UNET(BaseModel):
         self.slope_direction_channel = slope_direction_channel
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
-        self.perceptual_loss_fn = VGGPerceptualLoss(device=self.device)  # Initialize perceptual loss component
 
     def get_parameters(self):
         return {
@@ -485,9 +471,10 @@ class UNET(BaseModel):
             low_res = low_res.to(device)
             high_res = high_res.to(device)
 
-            # Apply augmentation (H-flip, V-flip with slope_direction correction)
+            # Apply augmentation — DataLoader's collate_fn (torch.stack) already
+            # allocates new tensors, so we don't need .clone() here.
             if self.augment:
-                low_res, high_res = augment_batch(low_res.clone(), high_res.clone(), 
+                low_res, high_res = augment_batch(low_res, high_res,
                                                    slope_dir_channel=self.slope_direction_channel)
 
             self.optim.zero_grad()
@@ -550,7 +537,7 @@ class UNET(BaseModel):
 
             # Apply augmentation (H-flip, V-flip with slope_direction correction)
             if self.augment:
-                conditioning, target = augment_batch(conditioning.clone(), target.clone(),
+                conditioning, target = augment_batch(conditioning, target,
                                                       slope_dir_channel=self.slope_direction_channel)
 
             self.optim.zero_grad()
@@ -747,47 +734,60 @@ class UNET(BaseModel):
 #         self.discriminator.to(device)
 
         self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
-        T_max=self.nr_epochs
+        epochs_already_done = self.history.get('nr_epochs', 0)
+        if 'total_nr_epochs' not in self.history:
+            self.history['total_nr_epochs'] = self.nr_epochs
+        T_max = self.history['total_nr_epochs']
+        epochs_this_job = self.nr_epochs
         scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-5)
         self._scheduler = scheduler
+
+        # Restore optimizer/scheduler state if continuing
+        if hasattr(self, '_saved_optimizer_state_path') and self._saved_optimizer_state_path:
+            optimizer_state = torch.load(self._saved_optimizer_state_path, map_location=device)
+            self.optim.load_state_dict(optimizer_state)
+            self._saved_optimizer_state_path = None
+        if hasattr(self, '_saved_scheduler_state_path') and self._saved_scheduler_state_path:
+            scheduler_state = torch.load(self._saved_scheduler_state_path, map_location=device)
+            scheduler.load_state_dict(scheduler_state)
+            self._saved_scheduler_state_path = None
+
+        self._sigterm_received = False
+        def _handle_sigterm(signum, frame):
+            print(f"\n[SIGTERM received] Finishing current epoch then saving...")
+            self._sigterm_received = True
+        signal.signal(signal.SIGTERM, _handle_sigterm)
 
         # Keep batches on CPU, move to GPU per-batch to avoid VRAM OOM
         train_batches = [(low_res, high_res, labels) for low_res, high_res, labels in train_loader]
         test_batches = [(low_res, high_res, labels) for low_res, high_res, labels in test_loader]
 
         try:
-            for epoch in range(self.nr_epochs):
+            for epoch in range(epochs_this_job):
+                global_epoch = epochs_already_done + epoch
                 train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch(train_batches, device)
-                if epoch<T_max:
+                if global_epoch < T_max:
                     scheduler.step()
                 if epoch % self.test_interval == 0:
                     test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch(test_batches, device)
-#                     scheduler_D.step(test_loss)     
                     lr = self.get_lr(self.optim)
-#                     lr_D = self.get_lr(self.optim_D)                    
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
-                    print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
-#                     print(f"epoch: {epoch}, adversarial:g: {train_bias_loss:.6f} d: {train_d_loss:.6f}")
+                    print(f"epoch: {global_epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
                     print(f"learn rate: {lr:.6f}")
-        
-                # Early stopping condition
-#                 if test_loss < 0.000510:
-#                     print(f"Early stopping as Test MSE reached {test_loss:.6f}, below 0.000510.")
-#                     break    
 
                 # Save checkpoint every N epochs
-                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
-                    # Temporarily update nr_epochs to reflect actual progress
-                    original_nr_epochs = self.history['nr_epochs']
-                    self.history['nr_epochs'] = original_nr_epochs + epoch + 1
-                    
-                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                if self.checkpoint_interval and model_path and (global_epoch + 1) % self.checkpoint_interval == 0:
+                    self.history['nr_epochs'] = global_epoch + 1
+                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{global_epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
-                    
-                    # Restore for continued training
-                    self.history['nr_epochs'] = original_nr_epochs
+
+                if self._sigterm_received:
+                    self.history['nr_epochs'] = global_epoch + 1
+                    if model_path:
+                        self.save(model_path)
+                    break
                     
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
@@ -801,7 +801,8 @@ class UNET(BaseModel):
             end = time.time()
             elapsed = end - start
 
-        self.history['nr_epochs'] += self.nr_epochs
+        if not self._sigterm_received:
+            self.history['nr_epochs'] = epochs_already_done + epochs_this_job
 
         print("elapsed:" + str(elapsed))
 
@@ -902,7 +903,20 @@ class UNET(BaseModel):
             self.decoder.to(device)
             self.optim = torch.optim.AdamW(list(self.encoder.parameters()) + list(self.decoder.parameters()), lr=self.lr, weight_decay=self.weight_decay)
 
-        T_max = self.nr_epochs
+        # T_max must span the TOTAL training duration, not just this job's epochs.
+        # If we set T_max = self.nr_epochs (per-job), the scheduler restarts its cosine
+        # cycle on every job boundary, causing a massive LR discontinuity.
+        # Solution: store total_nr_epochs in history and use it as T_max always.
+        epochs_already_done = self.history.get('nr_epochs', 0)
+        if 'total_nr_epochs' not in self.history:
+            # Fresh training: total target = nr_epochs
+            self.history['total_nr_epochs'] = self.nr_epochs
+        # Always respect total_nr_epochs from history (set by fresh-start or CLI override)
+        T_max = self.history['total_nr_epochs']
+        epochs_this_job = self.nr_epochs  # how many epochs to run in this job
+
+        print(f"Scheduler: T_max={T_max} (total), already done={epochs_already_done}, this job={epochs_this_job}")
+
         scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=T_max, eta_min=1e-5)
         self._scheduler = scheduler  # store reference so save() can access it
 
@@ -920,16 +934,48 @@ class UNET(BaseModel):
             scheduler.load_state_dict(scheduler_state)
             self._saved_scheduler_state_path = None
 
-        # No batch preloading needed - PreprocessedDataset.__getitem__ is fast (just tensor slicing)
-        # DataLoader iterates directly over the in-memory tensors
+        # SIGTERM handler: SLURM sends SIGTERM ~30s before killing the job.
+        # We catch it, set a flag, and save a clean checkpoint at the end of the current epoch.
+        self._sigterm_received = False
+        def _handle_sigterm(signum, frame):
+            print(f"\n[SIGTERM received] Finishing current epoch then saving emergency checkpoint...")
+            self._sigterm_received = True
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+
+        # ---- Best-checkpoint tracking (persists across job boundaries via history) ----
+        # We track two "optimal" points:
+        #
+        # 1. checkpoint_best_test_mse/
+        #    Saved when EMA-smoothed test MSE hits a new minimum.
+        #    Best absolute generalisation — use this for inference.
+        #
+        # 2. checkpoint_best_ratio/
+        #    Saved when train/test ratio hits a new minimum.
+        #    Diagnostic: where the model was least overfit relative to training loss.
+        #
+        # EMA smoothing (alpha=0.3) removes single-epoch noise spikes without
+        # masking real trends. State is stored in history so it survives job boundaries.
+        #
+        # Both checkpoints are saved via self.save() so --continue-training works
+        # identically from them as from any other checkpoint.
+        EMA_ALPHA = 0.3
+        _ema_test = self.history.get('_ema_test_mse', None)
+        _best_ema_test = self.history.get('_best_ema_test_mse', float('inf'))
+        _ema_ratio = self.history.get('_ema_ratio', None)
+        _best_ema_ratio = self.history.get('_best_train_test_ratio', float('inf'))
+        # Minimum epoch before ratio tracking starts. Before this point train loss
+        # >> test loss (ratio < 1) which is meaningless, and the EMA needs a few
+        # steps to warm up anyway.
+        RATIO_WARMUP_EPOCHS = 50
 
         try:
-            for epoch in range(self.nr_epochs):
+            for epoch in range(epochs_this_job):
+                global_epoch = epochs_already_done + epoch  # epoch number in the full training run
                 if self.architecture == 'flow_matching':
                     train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_flow_matching(train_loader, device)
                 else:
                     train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
-                if epoch < T_max:
+                if global_epoch < T_max:
                     scheduler.step()
                 if epoch % self.test_interval == 0:
                     if self.architecture == 'flow_matching':
@@ -939,38 +985,87 @@ class UNET(BaseModel):
                     lr = self.get_lr(self.optim)
                     self.history["train_loss"].append(train_loss)
                     self.history["test_loss"].append(test_loss)
-                    if self.architecture == 'flow_matching':
-                        print(f"epoch: {epoch}, train_velocity_mse: {train_loss:.6f}, test_velocity_mse: {test_bias_loss:.6f}, test_output_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
+
+                    # Update EMA of test loss
+                    if _ema_test is None:
+                        _ema_test = test_loss
                     else:
-                        print(f"epoch: {epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}")
+                        _ema_test = EMA_ALPHA * test_loss + (1 - EMA_ALPHA) * _ema_test
+
+                    ratio = test_loss / train_loss if train_loss > 0 else float('inf')
+
+                    # EMA of ratio (same alpha as test MSE)
+                    if _ema_ratio is None:
+                        _ema_ratio = ratio
+                    else:
+                        _ema_ratio = EMA_ALPHA * ratio + (1 - EMA_ALPHA) * _ema_ratio
+
+                    if self.architecture == 'flow_matching':
+                        print(f"epoch: {global_epoch}, train_velocity_mse: {train_loss:.6f}, test_velocity_mse: {test_bias_loss:.6f}, test_output_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}, ema_test: {_ema_test:.6f}, ema_ratio: {_ema_ratio:.3f}")
+                    else:
+                        print(f"epoch: {global_epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}, ema_test: {_ema_test:.6f}, ema_ratio: {_ema_ratio:.3f}")
                     print(f"learn rate: {lr:.6f}")
-                
+
+                    # Persist EMA state and bests in history for job-boundary survival
+                    self.history['_ema_test_mse'] = _ema_test
+                    self.history['_ema_ratio'] = _ema_ratio
+
+                    # ---- Checkpoint: best absolute test performance ----
+                    if model_path and _ema_test < _best_ema_test:
+                        _best_ema_test = _ema_test
+                        self.history['_best_ema_test_mse'] = _best_ema_test
+                        self.history['_best_ema_test_epoch'] = global_epoch
+                        self.history['nr_epochs'] = global_epoch + 1
+                        best_test_path = os.path.join(model_path, "checkpoint_best_test_mse")
+                        print(f"  ★ New best smoothed test MSE {_ema_test:.6f} at epoch {global_epoch} → saving {best_test_path}")
+                        self.save(best_test_path)
+
+                    # ---- Checkpoint: best train/test ratio (least overfit) ----
+                    # Guards: epoch > warmup (EMA needs time to stabilise, early epochs
+                    # have train >> test so ratio < 1 which is meaningless) AND
+                    # ema_ratio > 1.0 (model must actually be overfitting for ratio to matter).
+                    ratio_ready = global_epoch >= RATIO_WARMUP_EPOCHS and _ema_ratio > 1.0
+                    if model_path and ratio_ready and _ema_ratio < _best_ema_ratio:
+                        _best_ema_ratio = _ema_ratio
+                        self.history['_best_train_test_ratio'] = _best_ema_ratio
+                        self.history['_best_ratio_epoch'] = global_epoch
+                        self.history['nr_epochs'] = global_epoch + 1
+                        best_ratio_path = os.path.join(model_path, "checkpoint_best_ratio")
+                        print(f"  ★ New best EMA ratio {_ema_ratio:.3f} at epoch {global_epoch} → saving {best_ratio_path}")
+                        self.save(best_ratio_path)
+
                 # Save checkpoint every N epochs
-                if self.checkpoint_interval and model_path and (epoch + 1) % self.checkpoint_interval == 0:
-                    # Temporarily update nr_epochs to reflect actual progress
-                    original_nr_epochs = self.history['nr_epochs']
-                    self.history['nr_epochs'] = original_nr_epochs + epoch + 1
-                    
-                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{original_nr_epochs + epoch + 1}")
+                if self.checkpoint_interval and model_path and (global_epoch + 1) % self.checkpoint_interval == 0:
+                    self.history['nr_epochs'] = global_epoch + 1
+                    checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{global_epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
-                    
-                    # Restore for continued training
-                    self.history['nr_epochs'] = original_nr_epochs
+
+                # SIGTERM received: save and exit cleanly so SLURM can resubmit
+                if self._sigterm_received:
+                    print(f"[SIGTERM] Saving emergency checkpoint at global epoch {global_epoch + 1}...")
+                    self.history['nr_epochs'] = global_epoch + 1
+                    if model_path:
+                        emergency_path = os.path.join(model_path, f"checkpoint_epoch_{global_epoch + 1}_sigterm")
+                        self.save(emergency_path)
+                        # Also overwrite the main model folder so --model-folder continues from here
+                        self.save(model_path)
+                    break
 
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
-            # Save emergency checkpoint on interrupt
             if model_path:
                 emergency_path = os.path.join(model_path, "checkpoint_interrupted")
                 print(f"Saving emergency checkpoint to {emergency_path}...")
-                self.history['nr_epochs'] += epoch + 1
+                self.history['nr_epochs'] = epochs_already_done + epoch + 1
                 self.save(emergency_path)
         finally:
             end = time.time()
             elapsed = end - start
 
-        self.history['nr_epochs'] += self.nr_epochs
+        # Update nr_epochs to reflect true total trained (SIGTERM path already set it)
+        if not self._sigterm_received:
+            self.history['nr_epochs'] = epochs_already_done + epochs_this_job
 
         print("elapsed:" + str(elapsed))
 

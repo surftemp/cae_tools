@@ -1,0 +1,19 @@
+Map:   /gws/nopw/j04/eocis_chuk/shaerdan/models/scores/debug_outputs/uk_maps/2023-08-04_model_pB_standard_aug_ep500.nc
+Label: model_pB_standard_aug_ep500 2023-08-04
+
+Model:  model_pB_standard_aug_ep500 2023-08-04
+File:   /gws/nopw/j04/eocis_chuk/shaerdan/models/scores/debug_outputs/uk_maps/2023-08-04_model_pB_standard_aug_ep500.nc
+
+Total pixels (non-NaN): 24,775,376
+Cold (<280K):           568,980  (2.30%)
+Est range:              [266.0K, 328.1K]
+Est mean:               294.5K
+
+Distribution:
+  260-270K:      684  (0.0%)
+  270-280K:  568,296  (2.3%)
+  280-290K: 2,806,883  (11.3%)
+  290-300K: 18,515,195  (74.7%)
+  300-310K: 2,879,413  (11.6%)
+  310-320K:    4,892  (0.0%)
+  320-330K:       13  (0.0%)

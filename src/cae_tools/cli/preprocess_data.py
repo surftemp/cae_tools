@@ -19,8 +19,9 @@ Preprocess netCDF training data into efficient .pt format.
 This script:
 1. Reads netCDF files one at a time (low memory)
 2. Extracts only the needed input/output variables
-3. Computes normalization statistics (or uses external ones)
-4. Saves normalized tensors to a single .pt file
+3. Optionally filters cloud-contaminated boxes (BEFORE normalization)
+4. Computes normalization statistics (or uses external ones)
+5. Saves normalized tensors to a single .pt file
 
 Usage (training data - computes its own stats):
     preprocess_data --input-files /path/to/train/*.nc \
@@ -35,19 +36,20 @@ Usage (test data - uses train stats):
                     --output-variable ST_slices \
                     --use-norm-from train_preprocessed.pt
 
-# Z-score (recommended — season-agnostic, preserves hot extremes)
+# Z-score filtering (recommended - season-agnostic, catches structured contamination)
+# Removes boxes where z-score of (LST - ERA5) delta is below threshold.
+# Filtering is applied BEFORE normalization so stats reflect clean data only.
 preprocess_data ... --filter-cloud zscore --zscore-threshold -3.0
 
-# Threshold (what we used manually)
+# Threshold filtering (explicit physical thresholds)
 preprocess_data ... --filter-cloud threshold \
     --era5-warm-threshold 288 \
     --delta-threshold-warm -10 \
     --delta-threshold-cold -15
-
-                    
 """
 
 import argparse
+import datetime
 import glob
 import json
 import os
@@ -102,7 +104,19 @@ def main():
                         help='Input variable to subtract from output when --compute-delta (default: era5_skt)')
     parser.add_argument('--output-activation', type=str, choices=['sigmoid', 'tanh'], default='sigmoid',
                         help='Output activation: sigmoid normalizes to [0,1], tanh to [-1,1] (default: sigmoid)')
-    
+
+    # Cloud filtering arguments (applied BEFORE normalization)
+    parser.add_argument('--filter-cloud', type=str, choices=['none', 'zscore', 'threshold'], default='none',
+                        help='Cloud contamination filter to apply before normalization (default: none)')
+    parser.add_argument('--zscore-threshold', type=float, default=-3.0,
+                        help='Z-score of delta=(LST-ERA5): boxes below this z-score are removed (default: -3.0)')
+    parser.add_argument('--era5-warm-threshold', type=float, default=288.0,
+                        help='ERA5 temperature separating summer/winter for threshold filter (default: 288K)')
+    parser.add_argument('--delta-threshold-warm', type=float, default=-10.0,
+                        help='Delta (LST-ERA5) threshold for warm/summer boxes in threshold filter (default: -10K)')
+    parser.add_argument('--delta-threshold-cold', type=float, default=-15.0,
+                        help='Delta (LST-ERA5) threshold for cold/winter boxes in threshold filter (default: -15K)')
+
     args = parser.parse_args()
     
     # Expand glob patterns
@@ -179,6 +193,104 @@ def main():
         if (i + 1) % 20 == 0 or (i + 1) == len(files):
             print(f"  Processed {i+1}/{len(files)} files ({idx}/{total_boxes} boxes)")
     
+    # -------------------------------------------------------------------------
+    # Cloud contamination filtering
+    # Must happen BEFORE normalization so that normalization statistics are
+    # computed on clean data only. Filtering after normalization would use
+    # min/max values polluted by the very outliers we want to remove.
+    # -------------------------------------------------------------------------
+    # cloud_filter_meta collects all filtering stats for JSON export
+    cloud_filter_meta = {}
+
+    if args.filter_cloud != 'none':
+        if 'era5_skt' not in args.input_variables:
+            print("Error: --filter-cloud requires 'era5_skt' in --input-variables")
+            sys.exit(1)
+
+        era5_idx = args.input_variables.index('era5_skt')
+
+        # Per-box mean in physical units (data still raw/unnormalized here)
+        era5_means = inputs[:, era5_idx, :, :].mean(dim=[1, 2])  # (N,) K
+        lst_means  = outputs[:, 0, :, :].mean(dim=[1, 2])         # (N,) K
+        deltas     = lst_means - era5_means                        # (N,) LST - ERA5
+        # NOTE: delta is used for DETECTION only — output target remains raw LST
+
+        if args.filter_cloud == 'zscore':
+            # If use_norm_from is provided, load delta stats from train file so
+            # test/val are filtered using the same distribution as training.
+            # Never recompute stats from test/val data — that would leak information.
+            if args.use_norm_from:
+                ext = torch.load(args.use_norm_from, map_location='cpu')
+                ext_norm = ext['normalisation_parameters']
+                if 'delta_mean' not in ext_norm or 'delta_std' not in ext_norm:
+                    print("Error: --use-norm-from file has no saved delta_mean/delta_std. "
+                          "Was it preprocessed with --filter-cloud zscore?")
+                    sys.exit(1)
+                delta_mean = ext_norm['delta_mean']
+                delta_std  = ext_norm['delta_std']
+                print("\nZ-score filtering (delta = LST - ERA5):")
+                print(f"  Using TRAINING distribution: mean={delta_mean:.2f}K, std={delta_std:.2f}K")
+                source = 'train_file'
+            else:
+                delta_mean = deltas.mean().item()
+                delta_std  = deltas.std().item()
+                print("\nZ-score filtering (delta = LST - ERA5):")
+                print(f"  Population: mean={delta_mean:.2f}K, std={delta_std:.2f}K")
+                source = 'this_dataset'
+
+            z_scores  = (deltas - delta_mean) / delta_std
+            keep_mask = z_scores >= args.zscore_threshold
+            n_removed = int((~keep_mask).sum())
+            cutoff_k  = delta_mean + args.zscore_threshold * delta_std
+
+            print(f"  Threshold: z < {args.zscore_threshold} => delta < {cutoff_k:.2f}K")
+            print(f"  Only cold outliers removed (z < threshold, warm extremes preserved)")
+            print(f"  Removed: {n_removed} boxes ({100*n_removed/total_boxes:.2f}%)")
+
+            cloud_filter_meta = {
+                'method': 'zscore',
+                'zscore_threshold': args.zscore_threshold,
+                'cutoff_delta_k': round(cutoff_k, 4),
+                'delta_mean_k': round(delta_mean, 4),
+                'delta_std_k': round(delta_std, 4),
+                'delta_stats_source': source,
+                'direction': 'cold_only',
+                'n_removed': n_removed,
+                'n_total_before': int(total_boxes),
+                'pct_removed': round(100 * n_removed / total_boxes, 4),
+            }
+
+        elif args.filter_cloud == 'threshold':
+            warm_mask   = era5_means > args.era5_warm_threshold
+            remove_warm = warm_mask  & (deltas < args.delta_threshold_warm)
+            remove_cold = (~warm_mask) & (deltas < args.delta_threshold_cold)
+            keep_mask   = ~(remove_warm | remove_cold)
+            n_removed   = int((~keep_mask).sum())
+            print("\nThreshold filtering (delta = LST - ERA5):")
+            print(f"  Removed warm (ERA5>{args.era5_warm_threshold}K, "
+                  f"delta<{args.delta_threshold_warm}K): {int(remove_warm.sum())} boxes")
+            print(f"  Removed cold (ERA5<={args.era5_warm_threshold}K, "
+                  f"delta<{args.delta_threshold_cold}K): {int(remove_cold.sum())} boxes")
+            print(f"  Total removed: {n_removed} ({100*n_removed/total_boxes:.2f}%)")
+
+            cloud_filter_meta = {
+                'method': 'threshold',
+                'era5_warm_threshold_k': args.era5_warm_threshold,
+                'delta_threshold_warm_k': args.delta_threshold_warm,
+                'delta_threshold_cold_k': args.delta_threshold_cold,
+                'direction': 'cold_only',
+                'n_removed_warm': int(remove_warm.sum()),
+                'n_removed_cold': int(remove_cold.sum()),
+                'n_removed': n_removed,
+                'n_total_before': int(total_boxes),
+                'pct_removed': round(100 * n_removed / total_boxes, 4),
+            }
+
+        inputs      = inputs[keep_mask]
+        outputs     = outputs[keep_mask]
+        total_boxes = int(keep_mask.sum())
+        print(f"  Remaining: {total_boxes} boxes\n")
+
     # Compute delta targets if requested (LST - ERA5, per pixel)
     if args.compute_delta:
         ref_var = args.delta_reference_variable
@@ -238,6 +350,12 @@ def main():
     if args.compute_delta:
         normalisation_parameters['predict_delta'] = True
         normalisation_parameters['delta_reference_variable'] = args.delta_reference_variable
+
+    # Save zscore delta stats into normalisation_parameters so test/val sets
+    # can use training distribution when filtering (never recompute from test data)
+    if args.filter_cloud == 'zscore' and cloud_filter_meta and cloud_filter_meta.get('delta_stats_source') == 'this_dataset':
+        normalisation_parameters['delta_mean'] = cloud_filter_meta['delta_mean_k']
+        normalisation_parameters['delta_std']  = cloud_filter_meta['delta_std_k']
     
     # Normalize data (in-place to save memory)
     if not args.no_normalize:
@@ -278,10 +396,37 @@ def main():
     }
     
     torch.save(save_dict, args.output_file)
-    
+
     file_size = os.path.getsize(args.output_file) / 1e9
     print(f"Done! Output file size: {file_size:.2f} GB")
     print(f"Samples: {total_boxes}")
+
+    # Write comprehensive metadata JSON alongside the .pt file
+    meta = {
+        'created': datetime.datetime.now().isoformat(),
+        'output_file': args.output_file,
+        'n_samples': total_boxes,
+        'input_variables': args.input_variables,
+        'output_variable': args.output_variable,
+        'output_activation': args.output_activation,
+        'normalized': not args.no_normalize,
+        'predict_delta': args.compute_delta,
+        'norm_source': args.use_norm_from if args.use_norm_from else 'this_dataset',
+        'filter_cloud': args.filter_cloud,
+        'cloud_filter': cloud_filter_meta if cloud_filter_meta else None,
+        'normalization': {
+            'method': 'min_max',
+            'min_output': normalisation_parameters['min_output'],
+            'max_output': normalisation_parameters['max_output'],
+            'inputs': {v: {'min': normalisation_parameters['min_inputs'][v],
+                           'max': normalisation_parameters['max_inputs'][v]}
+                       for v in args.input_variables},
+        },
+    }
+    meta_path = os.path.splitext(args.output_file)[0] + '_meta.json'
+    with open(meta_path, 'w') as f:
+        json.dump(meta, f, indent=2)
+    print(f"Metadata written to {meta_path}")
     
     if args.use_norm_from:
         print(f"\nNOTE: Data normalized using parameters from {args.use_norm_from}")

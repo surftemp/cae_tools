@@ -1,0 +1,44 @@
+===========================================
+Job ID: 2598173  |  Node: gpuhost007
+Start: Sun 22 Feb 17:37:23 GMT 2026  |  Target: 3500 epochs
+===========================================
+Fresh run: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa
+Loading preprocessed data...
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore_rm_coldpattern.pt...
+Loaded 102644 samples
+Input shape: torch.Size([102644, 11, 100, 100])
+Output shape: torch.Size([102644, 1, 100, 100])
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore_rm_coldpattern.pt...
+Loaded 8732 samples
+Input shape: torch.Size([8732, 11, 100, 100])
+Output shape: torch.Size([8732, 1, 100, 100])
+Training cases: 102644, Test cases: 8732
+Input shape: (11, 100, 100), Output shape: (1, 100, 100)
+Running on device: cuda
+Scheduler: T_max=3500 (total), already done=0, this job=3500
+epoch: 0, train_mse: 0.007209, train_pearson_loss: 0.7622, test_mse: 0.000728, test_pearson_loss: 0.5815, ema_test: 0.000728, ema_ratio: 0.101
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000728 at epoch 0 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 10, train_mse: 0.000633, train_pearson_loss: 0.4257, test_mse: 0.000568, test_pearson_loss: 0.4031, ema_test: 0.000680, ema_ratio: 0.340
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000680 at epoch 10 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 20, train_mse: 0.000589, train_pearson_loss: 0.4102, test_mse: 0.000535, test_pearson_loss: 0.3918, ema_test: 0.000637, ema_ratio: 0.510
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000637 at epoch 20 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 30, train_mse: 0.000559, train_pearson_loss: 0.3952, test_mse: 0.000520, test_pearson_loss: 0.3842, ema_test: 0.000602, ema_ratio: 0.636
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000602 at epoch 30 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 40, train_mse: 0.000540, train_pearson_loss: 0.3878, test_mse: 0.000539, test_pearson_loss: 0.3836, ema_test: 0.000583, ema_ratio: 0.744
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000583 at epoch 40 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 50, train_mse: 0.000518, train_pearson_loss: 0.3832, test_mse: 0.000521, test_pearson_loss: 0.3757, ema_test: 0.000564, ema_ratio: 0.823
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000564 at epoch 50 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 60, train_mse: 0.000564, train_pearson_loss: 0.4022, test_mse: 0.000577, test_pearson_loss: 0.3910, ema_test: 0.000568, ema_ratio: 0.883
+learn rate: 0.000300
+epoch: 70, train_mse: 0.000515, train_pearson_loss: 0.3835, test_mse: 0.000515, test_pearson_loss: 0.3744, ema_test: 0.000552, ema_ratio: 0.918
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000552 at epoch 70 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 80, train_mse: 0.000498, train_pearson_loss: 0.3811, test_mse: 0.000531, test_pearson_loss: 0.3745, ema_test: 0.000546, ema_ratio: 0.962
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000546 at epoch 80 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse

@@ -115,7 +115,18 @@ def main():
                 raise ValueError(f"Unknown model type: {parameters['type']}")
 
             mt.load(args.model_folder)
-            mt.nr_epochs = args.nr_epochs
+
+            # --nr-epochs is interpreted as the TOTAL epoch target (not additional epochs).
+            # This keeps T_max consistent across job boundaries.
+            # Compute how many epochs remain for this job.
+            already_done = mt.history.get('nr_epochs', 0)
+            total_target = args.nr_epochs
+            remaining = max(0, total_target - already_done)
+            print(f"Continue training: {already_done} epochs done, target {total_target}, running {remaining} this job")
+            mt.nr_epochs = remaining
+            # Propagate total target so scheduler uses correct T_max
+            mt.history['total_nr_epochs'] = total_target
+
             mt.lr = args.learning_rate
             mt.batch_size = args.batch_size
             mt.checkpoint_interval = args.checkpoint_interval
@@ -218,8 +229,13 @@ def main():
             raise ValueError(f"Unknown model type: {parameters['type']}")
 
         mt.load(args.model_folder)
-        # update selected parameters from the command line args
-        mt.nr_epochs = args.nr_epochs
+        # --nr-epochs is the TOTAL epoch target; compute remaining for this job
+        already_done = mt.history.get('nr_epochs', 0)
+        total_target = args.nr_epochs
+        remaining = max(0, total_target - already_done)
+        print(f"Continue training: {already_done} epochs done, target {total_target}, running {remaining} this job")
+        mt.nr_epochs = remaining
+        mt.history['total_nr_epochs'] = total_target
         mt.lr = args.learning_rate
         mt.batch_size = args.batch_size
         mt.checkpoint_interval = args.checkpoint_interval
