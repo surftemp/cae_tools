@@ -56,3 +56,5 @@ learn rate: 0.000299
 epoch: 130, train_mse: 0.000329, train_pearson_loss: 0.3228, test_mse: 0.000530, test_pearson_loss: 0.3438, ema_test: 0.000600, ema_ratio: 1.642
 learn rate: 0.000299
   ★ New best smoothed test MSE 0.000600 at epoch 130 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_797c8922/checkpoint_best_test_mse
+epoch: 140, train_mse: 0.000316, train_pearson_loss: 0.3199, test_mse: 0.000619, test_pearson_loss: 0.3438, ema_test: 0.000606, ema_ratio: 1.737
+learn rate: 0.000299

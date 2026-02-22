@@ -186,7 +186,9 @@ def main():
 
     # Initialise UNET input/output shapes from dataset if fresh run
     if not continue_training:
-        sample_input, sample_output = train_ds[0]
+        sample = train_ds[0]
+        sample_input  = sample[0]
+        sample_output = sample[1]
         joint.unet.input_shape = tuple(sample_input.shape)
         joint.unet.output_shape = tuple(sample_output.shape)
         joint.unet.normalisation_parameters = norm_params

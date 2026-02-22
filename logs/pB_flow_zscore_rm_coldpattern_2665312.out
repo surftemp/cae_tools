@@ -25,3 +25,6 @@ Scheduler: T_max=3500 (total), already done=0, this job=3500
 epoch: 0, train_velocity_mse: 0.113219, test_velocity_mse: 0.029091, test_output_mse: 0.005194, test_pearson_loss: 0.7084, ema_test: 0.005194, ema_ratio: 0.046
 learn rate: 0.000300
   ★ New best smoothed test MSE 0.005194 at epoch 0 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_zscore_rm_coldpattern_3332a651/checkpoint_best_test_mse
+epoch: 10, train_velocity_mse: 0.017828, test_velocity_mse: 0.014142, test_output_mse: 0.000808, test_pearson_loss: 0.5580, ema_test: 0.003878, ema_ratio: 0.046
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.003878 at epoch 10 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_zscore_rm_coldpattern_3332a651/checkpoint_best_test_mse
