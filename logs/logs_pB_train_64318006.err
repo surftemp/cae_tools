@@ -1,88 +1,0 @@
-/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
-  warnings.warn(
-/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG19_Weights.IMAGENET1K_V1`. You can also use `weights=VGG19_Weights.DEFAULT` to get the most up-to-date weights.
-  warnings.warn(msg)
-Downloading: "https://download.pytorch.org/models/vgg19-dcbb9e9d.pth" to /home/users/shaerdan/.cache/torch/hub/checkpoints/vgg19-dcbb9e9d.pth
-  0%|          | 0.00/548M [00:00<?, ?B/s]  3%|▎         | 15.0M/548M [00:00<00:03, 155MB/s]  7%|▋         | 40.8M/548M [00:00<00:02, 222MB/s] 14%|█▍        | 77.1M/548M [00:00<00:01, 295MB/s] 21%|██        | 114M/548M [00:00<00:01, 330MB/s]  27%|██▋       | 146M/548M [00:00<00:01, 332MB/s] 32%|███▏      | 178M/548M [00:00<00:01, 271MB/s] 37%|███▋      | 205M/548M [00:00<00:01, 249MB/s] 42%|████▏     | 230M/548M [00:00<00:01, 239MB/s] 46%|████▋     | 254M/548M [00:01<00:01, 234MB/s] 50%|█████     | 277M/548M [00:01<00:01, 229MB/s] 55%|█████▍    | 299M/548M [00:01<00:01, 201MB/s] 58%|█████▊    | 319M/548M [00:01<00:01, 197MB/s] 63%|██████▎   | 343M/548M [00:01<00:01, 210MB/s] 67%|██████▋   | 365M/548M [00:01<00:00, 216MB/s] 72%|███████▏  | 394M/548M [00:01<00:00, 240MB/s] 78%|███████▊  | 425M/548M [00:01<00:00, 266MB/s] 84%|████████▍ | 461M/548M [00:01<00:00, 298MB/s] 91%|█████████ | 498M/548M [00:02<00:00, 325MB/s] 98%|█████████▊| 535M/548M [00:02<00:00, 343MB/s]100%|██████████| 548M/548M [00:02<00:00, 267MB/s]
-/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
-  warnings.warn(
-/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG19_Weights.IMAGENET1K_V1`. You can also use `weights=VGG19_Weights.DEFAULT` to get the most up-to-date weights.
-  warnings.warn(msg)
-/home/users/shaerdan/cae_tools_pB/src/cae_tools/models/base_model.py:38: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
-  return torch.load(path)
-Traceback (most recent call last):
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/file_manager.py", line 209, in _acquire_with_cache_info
-    file = self._cache[self._key]
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/lru_cache.py", line 55, in __getitem__
-    value = self._cache[key]
-KeyError: [<class 'netCDF4._netCDF4.Dataset'>, ('/gws/nopw/j04/eocis_chuk/shaerdan/scores/train_scores_pB_15EB783f.nc',), 'a', (('clobber', True), ('diskless', False), ('format', 'NETCDF4'), ('persist', False)), 'fa6fc9fb-48cd-49b4-b41f-241a0fd63a2d']
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/bin/apply_cae", line 8, in <module>
-    sys.exit(main())
-  File "/home/users/shaerdan/cae_tools_pB/src/cae_tools/cli/apply_cae.py", line 114, in main
-    score_ds.to_netcdf(args.output_path)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/core/dataset.py", line 1912, in to_netcdf
-    return to_netcdf(  # type: ignore  # mypy cannot resolve the overloads:(
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/api.py", line 1215, in to_netcdf
-    store = store_open(target, mode, format, group, **kwargs)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 382, in open
-    return cls(manager, group=group, mode=mode, lock=lock, autoclose=autoclose)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 329, in __init__
-    self.format = self.ds.data_model
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 391, in ds
-    return self._acquire()
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 385, in _acquire
-    with self._manager.acquire_context(needs_lock) as root:
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/contextlib.py", line 113, in __enter__
-    return next(self.gen)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/file_manager.py", line 197, in acquire_context
-    file, cached = self._acquire_with_cache_info(needs_lock)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/file_manager.py", line 215, in _acquire_with_cache_info
-    file = self._opener(*self._args, **kwargs)
-  File "src/netCDF4/_netCDF4.pyx", line 2521, in netCDF4._netCDF4.Dataset.__init__
-  File "src/netCDF4/_netCDF4.pyx", line 2158, in netCDF4._netCDF4._ensure_nc_success
-PermissionError: [Errno 13] Permission denied: '/gws/nopw/j04/eocis_chuk/shaerdan/scores/train_scores_pB_15EB783f.nc'
-/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:208: UserWarning: The parameter 'pretrained' is deprecated since 0.13 and may be removed in the future, please use 'weights' instead.
-  warnings.warn(
-/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/torchvision/models/_utils.py:223: UserWarning: Arguments other than a weight enum or `None` for 'weights' are deprecated since 0.13 and may be removed in the future. The current behavior is equivalent to passing `weights=VGG19_Weights.IMAGENET1K_V1`. You can also use `weights=VGG19_Weights.DEFAULT` to get the most up-to-date weights.
-  warnings.warn(msg)
-/home/users/shaerdan/cae_tools_pB/src/cae_tools/models/base_model.py:38: FutureWarning: You are using `torch.load` with `weights_only=False` (the current default value), which uses the default pickle module implicitly. It is possible to construct malicious pickle data which will execute arbitrary code during unpickling (See https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models for more details). In a future release, the default value for `weights_only` will be flipped to `True`. This limits the functions that could be executed during unpickling. Arbitrary objects will no longer be allowed to be loaded via this mode unless they are explicitly allowlisted by the user via `torch.serialization.add_safe_globals`. We recommend you start setting `weights_only=True` for any use case where you don't have full control of the loaded file. Please open an issue on GitHub for any issues related to this experimental feature.
-  return torch.load(path)
-Traceback (most recent call last):
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/file_manager.py", line 209, in _acquire_with_cache_info
-    file = self._cache[self._key]
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/lru_cache.py", line 55, in __getitem__
-    value = self._cache[key]
-KeyError: [<class 'netCDF4._netCDF4.Dataset'>, ('/gws/nopw/j04/eocis_chuk/shaerdan/scores/test_scores_pB_15EB783f.nc',), 'a', (('clobber', True), ('diskless', False), ('format', 'NETCDF4'), ('persist', False)), 'a31ddfba-8c07-409d-92e3-256cfaeb4252']
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/bin/apply_cae", line 8, in <module>
-    sys.exit(main())
-  File "/home/users/shaerdan/cae_tools_pB/src/cae_tools/cli/apply_cae.py", line 114, in main
-    score_ds.to_netcdf(args.output_path)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/core/dataset.py", line 1912, in to_netcdf
-    return to_netcdf(  # type: ignore  # mypy cannot resolve the overloads:(
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/api.py", line 1215, in to_netcdf
-    store = store_open(target, mode, format, group, **kwargs)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 382, in open
-    return cls(manager, group=group, mode=mode, lock=lock, autoclose=autoclose)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 329, in __init__
-    self.format = self.ds.data_model
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 391, in ds
-    return self._acquire()
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/netCDF4_.py", line 385, in _acquire
-    with self._manager.acquire_context(needs_lock) as root:
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/contextlib.py", line 113, in __enter__
-    return next(self.gen)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/file_manager.py", line 197, in acquire_context
-    file, cached = self._acquire_with_cache_info(needs_lock)
-  File "/gws/nopw/j04/eocis_chuk/shaerdan/envs/pyt_cae_tools/lib/python3.8/site-packages/xarray/backends/file_manager.py", line 215, in _acquire_with_cache_info
-    file = self._opener(*self._args, **kwargs)
-  File "src/netCDF4/_netCDF4.pyx", line 2521, in netCDF4._netCDF4.Dataset.__init__
-  File "src/netCDF4/_netCDF4.pyx", line 2158, in netCDF4._netCDF4._ensure_nc_success
-PermissionError: [Errno 13] Permission denied: '/gws/nopw/j04/eocis_chuk/shaerdan/scores/test_scores_pB_15EB783f.nc'
