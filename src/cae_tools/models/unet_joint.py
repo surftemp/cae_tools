@@ -341,6 +341,14 @@ class JointUNET:
         self.unet.loss_fn = torch.nn.MSELoss()
         start = time.time()
 
+
+        _np = self.unet.normalisation_parameters
+        min_out  = _np['min_output']
+        max_out  = _np['max_output']
+        era5_min = _np['min_inputs']['era5_skt']
+        era5_max = _np['max_inputs']['era5_skt']
+        
+
         # ---- Training loop ----
         try:
             for epoch in range(epochs_this_job):
@@ -362,7 +370,9 @@ class JointUNET:
                 n_batches = 0
 
                 last_lst_raw = last_lst_cn = last_era5 = last_pred = None
-
+                total_raw_cold = torch.tensor(0, device=device)
+                total_lifted = torch.tensor(0, device=device)
+                
                 for batch in train_loader:
                     # DataLoader yields (inputs, targets, labels) — 3 items
                     inputs, targets, _ = batch
@@ -439,6 +449,10 @@ class JointUNET:
                     last_lst_cn  = lst_cn.detach()
                     last_era5    = era5_norm.detach()
                     last_pred    = pred.detach()
+                    with torch.no_grad():
+                        _rc = (lst_raw_norm * (max_out - min_out) + min_out) < (era5_norm * (era5_max - era5_min) + era5_min - self.cold_threshold_k)
+                        total_raw_cold += _rc.sum()
+                        total_lifted += (_rc & ((lst_cn.detach() * (max_out - min_out) + min_out) >= (era5_norm * (era5_max - era5_min) + era5_min - self.cold_threshold_k))).sum()
 
                 train_loss = train_loss_sum / max(n_batches, 1)
 
@@ -520,8 +534,11 @@ class JointUNET:
                     print(f"  CN corr:    mean={cn_diag['cn_mean_correction_k']:.3f}K  "
                           f"max={cn_diag['cn_max_correction_k']:.3f}K  "
                           f"pct_active={cn_diag['cn_pct_active']:.1f}%")
-                    print(f"  CN cold:    raw_cold_px={cn_diag['n_raw_cold_pixels']:.0f}  "
-                          f"lifted={cn_diag['cn_cold_removed_pct']:.1f}%")
+                    _trc = total_raw_cold.item()
+                    _tli = total_lifted.item()
+                    _lifted_pct = (_tli / _trc * 100.0) if _trc > 0 else 100.0
+                    print(f"  CN cold:    raw_cold_px={_trc:.0f}  "
+                          f"lifted={_lifted_pct:.1f}%  (epoch-total)")
                     print(f"  lr:         unet={lr_unet:.2e}  cn={lr_cn:.2e}")
 
                     # Update history (use train_loss/test_loss to match unet.py)
