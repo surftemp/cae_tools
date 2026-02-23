@@ -73,7 +73,7 @@ train_cae_joint \
     --learning-rate=0.0003 \
     --weight-decay=1e-5 \
     --dropout-rate=0.1 \
-    --batch-size=512 \
+    --batch-size=64 \
     --architecture=standard \
     --base-channels=64 \
     --output-activation=none \

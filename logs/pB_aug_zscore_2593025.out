@@ -74,3 +74,7 @@ epoch: 200, train_mse: 0.000278, train_pearson_loss: 0.3070, test_mse: 0.000607,
 learn rate: 0.000298
 epoch: 210, train_mse: 0.000272, train_pearson_loss: 0.3049, test_mse: 0.000615, test_pearson_loss: 0.3359, ema_test: 0.000599, ema_ratio: 2.098
 learn rate: 0.000297
+epoch: 220, train_mse: 0.000269, train_pearson_loss: 0.3030, test_mse: 0.000636, test_pearson_loss: 0.3369, ema_test: 0.000610, ema_ratio: 2.178
+learn rate: 0.000297
+epoch: 230, train_mse: 0.000266, train_pearson_loss: 0.3015, test_mse: 0.000616, test_pearson_loss: 0.3343, ema_test: 0.000611, ema_ratio: 2.218
+learn rate: 0.000297
