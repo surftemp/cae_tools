@@ -1,0 +1,17 @@
+===========================================
+Job ID: 2673839  |  Node: gpuhost004
+Start: Mon 23 Feb 00:56:22 GMT 2026  |  Target: 3500 epochs
+===========================================
+Fresh run: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_joint_5459a83a
+Loading preprocessed data...
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore_rm_coldpattern.pt...
+Loaded 102644 samples
+Input shape: torch.Size([102644, 11, 100, 100])
+Output shape: torch.Size([102644, 1, 100, 100])
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore_rm_coldpattern.pt...
+Loaded 8732 samples
+Input shape: torch.Size([8732, 11, 100, 100])
+Output shape: torch.Size([8732, 1, 100, 100])
+Running on device: cuda
+Scheduler: T_max=3500 (total), already done=0, this job=3500
+ERROR: train_cae_joint exited with code 1 — chain terminated.

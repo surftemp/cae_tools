@@ -1,0 +1,53 @@
+===========================================
+Job ID: 2670127  |  Node: gpuhost008
+Start: Sun 22 Feb 22:46:45 GMT 2026  |  Target: 3500 epochs
+===========================================
+Fresh run: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_joint_c7b925fd
+Loading preprocessed data...
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/train_v8_zscore_rm_coldpattern.pt...
+Loaded 102644 samples
+Input shape: torch.Size([102644, 11, 100, 100])
+Output shape: torch.Size([102644, 1, 100, 100])
+Loading preprocessed data from /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore_rm_coldpattern.pt...
+Loaded 8732 samples
+Input shape: torch.Size([8732, 11, 100, 100])
+Output shape: torch.Size([8732, 1, 100, 100])
+Running on device: cuda
+Scheduler: T_max=3500 (total), already done=0, this job=3500
+
+epoch: 0
+  losses:     l_main=0.009143  l_cn=0.001186  l_reg=0.000157  l_cold=0.001028
+  mse:        train=0.009143  test=0.000924  ema_test=0.000924  ema_ratio=0.101
+  cold%:      train=1.02%  test=0.00%
+  CN target:  mean_delta=+0.25K
+  CN corr:    mean=1.316K  max=10.390K  pct_active=49.7%
+  CN cold:    raw_cold_px=0  lifted=100.0%
+  lr:         unet=3.00e-04  cn=1.00e-04
+  ★ New best ema_test 0.000924 → /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_joint_c7b925fd/checkpoint_best_test_mse
+
+epoch: 10
+  losses:     l_main=0.004983  l_cn=0.004014  l_reg=0.000160  l_cold=0.003854
+  mse:        train=0.004983  test=0.007612  ema_test=0.002930  ema_ratio=0.529
+  cold%:      train=3.82%  test=0.00%
+  CN target:  mean_delta=-2.16K
+  CN corr:    mean=2.265K  max=13.205K  pct_active=72.0%
+  CN cold:    raw_cold_px=9  lifted=100.0%
+  lr:         unet=3.00e-04  cn=1.00e-04
+
+epoch: 20
+  losses:     l_main=0.001014  l_cn=0.001680  l_reg=0.000169  l_cold=0.001511
+  mse:        train=0.001014  test=0.000713  ema_test=0.002265  ema_ratio=0.581
+  cold%:      train=1.51%  test=0.00%
+  CN target:  mean_delta=-0.18K
+  CN corr:    mean=1.764K  max=20.020K  pct_active=56.4%
+  CN cold:    raw_cold_px=1  lifted=100.0%
+  lr:         unet=3.00e-04  cn=1.00e-04
+
+epoch: 30
+  losses:     l_main=0.000130  l_cn=0.000166  l_reg=0.000166  l_cold=0.000000
+  mse:        train=0.000130  test=0.000717  ema_test=0.001801  ema_ratio=2.062
+  cold%:      train=0.00%  test=0.00%
+  CN target:  mean_delta=-0.11K
+  CN corr:    mean=1.832K  max=18.863K  pct_active=58.9%
+  CN cold:    raw_cold_px=349  lifted=100.0%
+  lr:         unet=3.00e-04  cn=1.00e-04

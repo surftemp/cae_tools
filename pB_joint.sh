@@ -69,7 +69,6 @@ train_cae_joint \
     --train-inputs ${trainFile} \
     --test-inputs ${testFile} \
     --model-folder "$modelFolder" \
-    --models-dir "$MODELS_DIR" \
     --nr-epochs=$TOTAL_EPOCHS \
     --learning-rate=0.0003 \
     --weight-decay=1e-5 \
@@ -82,12 +81,16 @@ train_cae_joint \
     --slope-direction-channel=7 \
     --checkpoint-interval=500 \
     --database-path="$databasePath" \
-    --lambda-pearson=0.0 \
+    --lambda-pearson=0.0005 \
     --cn-base-channels=32 \
     --cn-n-conv-layers=4 \
     --cn-cold-threshold-norm=0.3 \
     --lambda-sparsity=0.01 \
     --lambda-cold=0.1 \
+    --lambda-mmd=0.1 \
+    --lambda-identity=0.1 \
+    --max-mask-fraction=0.35 \
+    --lambda-mask-cap=1.0 \
     --cold-threshold-k=10.0 \
     --cn-lr=0.0001 \
     $CONTINUE_FLAG

@@ -16,9 +16,9 @@
 #SBATCH --mem=64G
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --job-name=pB_standard_aug_zscore_nomonthly
-#SBATCH --output=/home/users/shaerdan/cae_tools_pB/logs/pB_aug_zscore_nomonthly_%j.out
-#SBATCH --error=/home/users/shaerdan/cae_tools_pB/logs/pB_aug_zscore_nomonthly_%j.err
+#SBATCH --job-name=pB_standard_aug_zscore_rm_coldpattern
+#SBATCH --output=/home/users/shaerdan/cae_tools_pB/logs/pB_aug_zscore_rm_coldpattern_pearson_%j.out
+#SBATCH --error=/home/users/shaerdan/cae_tools_pB/logs/pB_aug_zscore_rm_coldpattern_pearson_%j.err
 #SBATCH --signal=TERM@120
 
 
@@ -32,17 +32,17 @@ export PYTHONUNBUFFERED=1
 
 TOTAL_EPOCHS=3500
 learningRate=0.0003
-lambda_pearson=0
+lambda_pearson=0.0005
 weight_decay=1e-5
 dropout_rate=0.1
 batchSize=512
 checkpointInterval=500
 baseChannels=64
-databasePath="database_pB_standard_aug_zscore_nomonthly.db"
+databasePath="database_pB_standard_aug_zscore_rm_coldpattern.db"
 MODELS_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/models"
 PREPROCESSED_DIR="/gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8"
-trainFile="${PREPROCESSED_DIR}/train_v8_zscore_nomonthly.pt"
-testFile="${PREPROCESSED_DIR}/test_v8_zscore_nomonthly.pt"
+trainFile="${PREPROCESSED_DIR}/train_v8_zscore_rm_coldpattern.pt"
+testFile="${PREPROCESSED_DIR}/test_v8_zscore_rm_coldpattern.pt"
 
 set -euo pipefail
 
@@ -63,7 +63,7 @@ if [ -n "${MODEL_FOLDER:-}" ] && [ -f "${MODEL_FOLDER}/parameters.json" ]; then
     echo "Continuing from: $modelFolder"
 else
     hash=$(python3 -c "import uuid; print(uuid.uuid4().hex[:8])")
-    modelFolder="${MODELS_DIR}/model_pB_standard_aug_zscore_nomonthly_${hash}"
+    modelFolder="${MODELS_DIR}/model_pB_standard_aug_zscore_rm_coldpattern_pearson_${hash}"
     echo "Fresh run: $modelFolder"
 fi
 

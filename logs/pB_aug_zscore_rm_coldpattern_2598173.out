@@ -45,3 +45,20 @@ learn rate: 0.000300
 epoch: 90, train_mse: 0.000483, train_pearson_loss: 0.3769, test_mse: 0.000519, test_pearson_loss: 0.3749, ema_test: 0.000538, ema_ratio: 0.996
 learn rate: 0.000300
   ★ New best smoothed test MSE 0.000538 at epoch 90 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_test_mse
+epoch: 100, train_mse: 0.000475, train_pearson_loss: 0.3766, test_mse: 0.000541, test_pearson_loss: 0.3742, ema_test: 0.000539, ema_ratio: 1.039
+learn rate: 0.000299
+  ★ New best EMA ratio 1.039 at epoch 100 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_592261aa/checkpoint_best_ratio
+epoch: 110, train_mse: 0.000453, train_pearson_loss: 0.3704, test_mse: 0.000612, test_pearson_loss: 0.3695, ema_test: 0.000561, ema_ratio: 1.133
+learn rate: 0.000299
+epoch: 120, train_mse: 0.000440, train_pearson_loss: 0.3698, test_mse: 0.000527, test_pearson_loss: 0.3643, ema_test: 0.000551, ema_ratio: 1.152
+learn rate: 0.000299
+epoch: 130, train_mse: 0.000428, train_pearson_loss: 0.3671, test_mse: 0.000547, test_pearson_loss: 0.3718, ema_test: 0.000549, ema_ratio: 1.189
+learn rate: 0.000299
+epoch: 140, train_mse: 0.000421, train_pearson_loss: 0.3661, test_mse: 0.000560, test_pearson_loss: 0.3699, ema_test: 0.000553, ema_ratio: 1.232
+learn rate: 0.000299
+epoch: 150, train_mse: 0.000409, train_pearson_loss: 0.3632, test_mse: 0.000569, test_pearson_loss: 0.3679, ema_test: 0.000558, ema_ratio: 1.280
+learn rate: 0.000299
+epoch: 160, train_mse: 0.000402, train_pearson_loss: 0.3619, test_mse: 0.000578, test_pearson_loss: 0.3704, ema_test: 0.000564, ema_ratio: 1.327
+learn rate: 0.000298
+epoch: 170, train_mse: 0.000391, train_pearson_loss: 0.3591, test_mse: 0.000597, test_pearson_loss: 0.3685, ema_test: 0.000574, ema_ratio: 1.386
+learn rate: 0.000298

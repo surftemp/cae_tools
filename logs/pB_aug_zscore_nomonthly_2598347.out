@@ -47,3 +47,15 @@ learn rate: 0.000300
 epoch: 100, train_mse: 0.000563, train_pearson_loss: 0.5174, test_mse: 0.000683, test_pearson_loss: 0.5118, ema_test: 0.000651, ema_ratio: 1.043
 learn rate: 0.000299
   ★ New best EMA ratio 1.043 at epoch 100 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_nomonthly_36b89953/checkpoint_best_ratio
+epoch: 110, train_mse: 0.000545, train_pearson_loss: 0.5111, test_mse: 0.000634, test_pearson_loss: 0.5027, ema_test: 0.000646, ema_ratio: 1.079
+learn rate: 0.000299
+epoch: 120, train_mse: 0.000529, train_pearson_loss: 0.5057, test_mse: 0.000651, test_pearson_loss: 0.5031, ema_test: 0.000648, ema_ratio: 1.124
+learn rate: 0.000299
+epoch: 130, train_mse: 0.000513, train_pearson_loss: 0.5002, test_mse: 0.000711, test_pearson_loss: 0.4999, ema_test: 0.000667, ema_ratio: 1.203
+learn rate: 0.000299
+epoch: 140, train_mse: 0.000501, train_pearson_loss: 0.4961, test_mse: 0.000616, test_pearson_loss: 0.4995, ema_test: 0.000651, ema_ratio: 1.211
+learn rate: 0.000299
+epoch: 150, train_mse: 0.000489, train_pearson_loss: 0.4922, test_mse: 0.000679, test_pearson_loss: 0.4904, ema_test: 0.000660, ema_ratio: 1.264
+learn rate: 0.000299
+epoch: 160, train_mse: 0.000477, train_pearson_loss: 0.4881, test_mse: 0.000646, test_pearson_loss: 0.4931, ema_test: 0.000656, ema_ratio: 1.292
+learn rate: 0.000298
