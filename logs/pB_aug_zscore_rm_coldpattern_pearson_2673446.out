@@ -25,3 +25,9 @@ learn rate: 0.000300
 epoch: 20, train_mse: 0.000582, train_pearson_loss: 0.3896, test_mse: 0.000639, test_pearson_loss: 0.3798, ema_test: 0.000700, ema_ratio: 0.394
 learn rate: 0.000300
   ★ New best smoothed test MSE 0.000700 at epoch 20 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+epoch: 30, train_mse: 0.000560, train_pearson_loss: 0.3815, test_mse: 0.000520, test_pearson_loss: 0.3774, ema_test: 0.000646, ema_ratio: 0.555
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000646 at epoch 30 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+epoch: 40, train_mse: 0.000532, train_pearson_loss: 0.3753, test_mse: 0.000513, test_pearson_loss: 0.3755, ema_test: 0.000606, ema_ratio: 0.677
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.000606 at epoch 40 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse

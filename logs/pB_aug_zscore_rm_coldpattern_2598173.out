@@ -64,3 +64,5 @@ epoch: 170, train_mse: 0.000391, train_pearson_loss: 0.3591, test_mse: 0.000597,
 learn rate: 0.000298
 epoch: 180, train_mse: 0.000384, train_pearson_loss: 0.3566, test_mse: 0.000543, test_pearson_loss: 0.3606, ema_test: 0.000565, ema_ratio: 1.395
 learn rate: 0.000298
+epoch: 190, train_mse: 0.000377, train_pearson_loss: 0.3551, test_mse: 0.000590, test_pearson_loss: 0.3625, ema_test: 0.000572, ema_ratio: 1.446
+learn rate: 0.000298

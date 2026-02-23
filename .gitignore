@@ -162,3 +162,15 @@ cython_debug/
 # ignore results from running tests
 test/cli/results
 test/results
+
+# db
+*.db
+
+# slurm and shell
+*.slurm
+*.sh
+
+# logs
+logs/*
+
+

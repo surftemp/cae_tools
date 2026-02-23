@@ -514,8 +514,8 @@ class JointUNET:
                     print(f"  mse:        train={train_loss:.6f}  test={test_loss:.6f}  "
                           f"ema_test={_ema_test:.6f}  ema_ratio={_ema_ratio:.3f}  "
                           f"test_pearson={test_pearson_loss:.4f}")
-                    print(f"  cold%:      train={hard_cold_train_pct:.2f}%  "
-                          f"test={hard_cold_test_pct:.2f}%")
+                    print(f"  cold%:      train={hard_cold_train_pct:.4f}%  "
+                          f"test={hard_cold_test_pct:.4f}%")
                     print(f"  CN target:  mean_delta={cn_diag['lst_cn_mean_delta_k']:+.2f}K")
                     print(f"  CN corr:    mean={cn_diag['cn_mean_correction_k']:.3f}K  "
                           f"max={cn_diag['cn_max_correction_k']:.3f}K  "

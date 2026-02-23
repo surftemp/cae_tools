@@ -50,3 +50,10 @@ learn rate: 0.000300
 epoch: 80, train_velocity_mse: 0.013876, test_velocity_mse: 0.013581, test_output_mse: 0.000781, test_pearson_loss: 0.4301, ema_test: 0.001197, ema_ratio: 0.066
 learn rate: 0.000300
   ★ New best smoothed test MSE 0.001197 at epoch 80 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_zscore_rm_coldpattern_3332a651/checkpoint_best_test_mse
+epoch: 90, train_velocity_mse: 0.013586, test_velocity_mse: 0.012195, test_output_mse: 0.000830, test_pearson_loss: 0.4232, ema_test: 0.001087, ema_ratio: 0.064
+learn rate: 0.000300
+  ★ New best smoothed test MSE 0.001087 at epoch 90 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_zscore_rm_coldpattern_3332a651/checkpoint_best_test_mse
+Saving checkpoint to /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_zscore_rm_coldpattern_3332a651/checkpoint_epoch_100...
+epoch: 100, train_velocity_mse: 0.013229, test_velocity_mse: 0.013543, test_output_mse: 0.000825, test_pearson_loss: 0.4142, ema_test: 0.001008, ema_ratio: 0.064
+learn rate: 0.000299
+  ★ New best smoothed test MSE 0.001008 at epoch 100 → saving /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_flow_zscore_rm_coldpattern_3332a651/checkpoint_best_test_mse
