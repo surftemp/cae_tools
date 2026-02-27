@@ -16,10 +16,25 @@ At inference time, the CN is discarded. Only the main UNET is used.
 The main network input/output specification is completely unchanged.
 
 Design:
-  - Residual correction enforces identity by default
-  - Hard threshold prior initialises M toward 1 for obvious cloud pixels
+  - Residual correction enforces identity by default (zero-init final layer)
+  - No hardcoded cold prior — CN learns where to correct from gradient signal
+  - Local spatial gradient feature gives CN evidence of cloud edges
+  - Uniform identity loss on ALL pixels — corrections must be justified by MSE
   - Pluggable: can be replaced with any architecture that satisfies the
     CorrectionNetworkBase interface (e.g. diffusion-based in future)
+
+v2 changes (vs original):
+  - Removed cold_threshold_norm and cold_prior_bias — CN discovers what to
+    correct purely from training signal, not from hardcoded temperature rules
+  - Identity loss now uniform across all pixels (was warm-only, giving a free
+    pass to ~20% of pixels that happened to be colder than ERA5)
+  - Added local gradient feature: max |pixel - neighbor| over 8-connected
+    neighborhood, giving the CN spatial evidence of cloud edges (sharp 30-40K
+    transitions) without telling it what threshold to use
+  - Tighter max_mask_fraction (0.35 → 0.05) — only 0.01% of pixels in the
+    training set are >10K colder than ERA5, so 5% is already very generous
+  - Higher lambda_identity default (0.1 → 1.0) — CN needs strong resistance
+    to gratuitous changes given how few pixels actually need correction
 """
 
 import torch
@@ -68,17 +83,18 @@ class ConvCorrectionNetwork(CorrectionNetworkBase):
 
     Corrected LST = lst_raw + M * Delta
 
-    The hard threshold prior initialises M toward 1 for pixels where
-    lst_raw - era5 < cold_threshold_norm (cloud-suspect pixels).
-    This is a learned soft mask — the threshold is a prior, not a hard rule.
+    No hardcoded cold prior — M starts at sigmoid(0) = 0.5 but Delta starts
+    at 0 (zero-init), so the initial correction is zero everywhere. The CN
+    must learn where to correct from the training gradient signal alone.
 
     Inputs to the CNN:
-      - lst_raw_norm:  1 channel
-      - era5_norm:     1 channel
-      - static inputs: elevation, land_cover, slope_magnitude, slope_direction
-                       (indices specified via static_channel_indices)
+      - lst_raw_norm:     1 channel
+      - era5_norm:        1 channel
+      - local_max_grad:   1 channel (max |pixel - neighbor| over 8-connected)
+      - static inputs:    elevation, land_cover, slope_magnitude, slope_direction
+                          (indices specified via static_channel_indices)
 
-    Total input channels = 2 + len(static_channel_indices)
+    Total input channels = 3 + len(static_channel_indices)
     """
 
     def __init__(
@@ -86,24 +102,23 @@ class ConvCorrectionNetwork(CorrectionNetworkBase):
         static_channel_indices,    # list of channel indices from main input tensor
         base_channels=32,          # width of CNN (keep small — CN should be lightweight)
         n_conv_layers=4,           # depth of CNN
-        cold_threshold_norm=0.3,   # normalised delta below which pixels are suspect
-                                   # (0.3 in norm space ≈ -10K depending on norm range)
         lambda_sparsity=0.01,      # weight for L1 sparsity on (M * Delta)
-        lambda_identity=0.1,       # weight for identity preservation on warm pixels
-        max_mask_fraction=0.35,    # soft cap on mean(M) — penalty kicks in above this
+        lambda_identity=1.0,       # weight for identity preservation on ALL pixels
+        max_mask_fraction=0.05,    # soft cap on mean(M) — penalty kicks in above this
         lambda_mask_cap=1.0,       # weight for mask cap penalty
+        # Backward compatibility: accept but ignore cold_threshold_norm from old configs
+        cold_threshold_norm=None,
     ):
         super().__init__()
 
         self.static_channel_indices = static_channel_indices
-        self.cold_threshold_norm = cold_threshold_norm
         self.lambda_sparsity = lambda_sparsity
         self.lambda_identity = lambda_identity
         self.max_mask_fraction = max_mask_fraction
         self.lambda_mask_cap = lambda_mask_cap
 
-        # input: lst_raw + era5 + static channels
-        in_channels = 2 + len(static_channel_indices)
+        # input: lst_raw + era5 + local_max_grad + static channels
+        in_channels = 3 + len(static_channel_indices)
 
         layers = []
         ch_in = in_channels
@@ -129,10 +144,40 @@ class ConvCorrectionNetwork(CorrectionNetworkBase):
         self._mask_cap_loss = None
         self._last_mask_m = None
 
+    @staticmethod
+    def _compute_local_max_grad(lst_raw_norm):
+        """
+        Compute max absolute difference to 8-connected neighbors for each pixel.
+
+        Cloud edges produce sharp transitions (30-40K over 1 pixel) that are
+        physically unlike any natural surface boundary. This gives the CN
+        spatial evidence without a hardcoded threshold — it can learn what
+        gradient magnitudes indicate cloud contamination.
+
+        Args:
+            lst_raw_norm: (B, 1, H, W) normalised LST
+
+        Returns:
+            (B, 1, H, W) max |pixel - neighbor| over 8 directions
+        """
+        # Reflect-pad to handle edges
+        padded = F.pad(lst_raw_norm, (1, 1, 1, 1), mode='reflect')
+        H, W = lst_raw_norm.shape[2], lst_raw_norm.shape[3]
+
+        max_grad = torch.zeros_like(lst_raw_norm)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dy == 0 and dx == 0:
+                    continue
+                neighbor = padded[:, :, 1+dy:1+dy+H, 1+dx:1+dx+W]
+                max_grad = torch.max(max_grad, (lst_raw_norm - neighbor).abs())
+
+        return max_grad
+
     def forward(self, inputs, lst_raw_norm, era5_norm):
         """
         Args:
-            inputs:       (B, C, H, W) full input tensor (all 12 channels)
+            inputs:       (B, C, H, W) full input tensor (all channels)
             lst_raw_norm: (B, 1, H, W) normalised raw Landsat LST
             era5_norm:    (B, 1, H, W) normalised ERA5 (channel 3 of inputs)
         Returns:
@@ -141,25 +186,19 @@ class ConvCorrectionNetwork(CorrectionNetworkBase):
         # Extract static channels
         static = inputs[:, self.static_channel_indices, :, :]  # (B, n_static, H, W)
 
-        # Concatenate CN inputs
-        cn_input = torch.cat([lst_raw_norm, era5_norm, static], dim=1)  # (B, C_cn, H, W)
+        # Compute local spatial gradient feature
+        local_grad = self._compute_local_max_grad(lst_raw_norm)
+
+        # Concatenate CN inputs: LST + ERA5 + gradient + static
+        cn_input = torch.cat([lst_raw_norm, era5_norm, local_grad, static], dim=1)
 
         # Forward through CNN
         out = self.net(cn_input)  # (B, 2, H, W)
         delta = out[:, 0:1, :, :]          # (B, 1, H, W) — correction magnitude
         m_logit = out[:, 1:2, :, :]        # (B, 1, H, W) — mask logit
 
-        # Hard threshold prior: bias mask toward 1 for cloud-suspect pixels
-        # delta_norm = lst - era5 in normalised space
-        delta_norm = lst_raw_norm - era5_norm
-        # Pixels where delta_norm < -cold_threshold_norm are suspect
-        # Add a positive bias to m_logit for those pixels
-        cold_prior_bias = torch.where(
-            delta_norm < -self.cold_threshold_norm,
-            torch.ones_like(m_logit) * 2.0,   # sigmoid(2) ≈ 0.88 — lean toward correcting
-            torch.zeros_like(m_logit)
-        )
-        m = torch.sigmoid(m_logit + cold_prior_bias)  # (B, 1, H, W) in [0,1]
+        # No cold prior bias — CN learns where to correct from gradient signal
+        m = torch.sigmoid(m_logit)  # (B, 1, H, W) in [0,1]
 
         # Corrected LST
         lst_corrected_norm = lst_raw_norm + m * delta
@@ -171,16 +210,16 @@ class ConvCorrectionNetwork(CorrectionNetworkBase):
         # Encourages the CN to be conservative — only correct where necessary
         self._reg_loss = self.lambda_sparsity * (m * delta).abs().mean()
 
-        # Regularisation 2: Identity preservation on warm (non-suspect) pixels
-        # Pixels where lst_raw - era5 >= -cold_threshold_norm are not cloud-suspect.
-        # The CN must not apply corrections there — this blocks the degenerate solution
-        # of flattening the entire field to make the UNET's job trivially easy.
-        warm_mask = (delta_norm >= -self.cold_threshold_norm).float()
-        self._identity_loss = self.lambda_identity * (warm_mask * m * delta.abs()).mean()
+        # Regularisation 2: Identity preservation on ALL pixels (uniform)
+        # Every correction has a cost. The CN must overcome this penalty through
+        # improved l_main (MSE) to justify modifying any pixel. Cloud pixels
+        # give the biggest MSE benefit (30K wrong → huge gradient), so they
+        # naturally attract corrections. Clean pixels gain nothing from correction,
+        # so the identity cost dominates and the CN leaves them alone.
+        self._identity_loss = self.lambda_identity * (m * delta.abs()).mean()
 
         # Regularisation 3: Mask cap — soft quadratic penalty when mean(M) > max_mask_fraction
         # Prevents the CN from "correcting" the majority of pixels.
-        # Uses relu so gradient is zero below the cap and flows smoothly above it.
         mean_m = m.mean()
         self._mask_cap_loss = self.lambda_mask_cap * F.relu(mean_m - self.max_mask_fraction).pow(2)
 
@@ -350,19 +389,7 @@ def soft_cold_pixel_rate(
 
     Returns scalar tensor (mean cold score across batch).
     """
-    # Denormalise prediction and ERA5 to Kelvin.
-    # Handle both norm_params formats:
-    #   dict format (zscore preprocess path):
-    #     {'min_output': float, 'max_output': float,
-    #      'inputs': {'era5_skt': {'min': float, 'max': float}, ...}}
-    #   list format (DSDataset / older path):
-    #     [min_inputs_dict, max_inputs_dict, min_output_dict, max_output_dict]
-    # norm_params format (from PreprocessedDataset.get_normalisation_parameters()):
-    #   {'min_inputs': {'era5_skt': float, ...},
-    #    'max_inputs': {'era5_skt': float, ...},
-    #    'min_output': float, 'max_output': float, ...}
     if isinstance(norm_params, list):
-        # DSDataset list format: [min_inputs_dict, max_inputs_dict, min_out_dict, max_out_dict]
         min_out  = norm_params[2].get('ST_slices', list(norm_params[2].values())[0])
         max_out  = norm_params[3].get('ST_slices', list(norm_params[3].values())[0])
         era5_min = norm_params[0]['era5_skt']
@@ -376,11 +403,8 @@ def soft_cold_pixel_rate(
     pred_k = pred_norm * (max_out - min_out) + min_out
     era5_k = era5_norm * (era5_max - era5_min) + era5_min
 
-    # delta = pred - era5 (negative = cold relative to ERA5)
     delta_k = pred_k - era5_k
 
-    # soft cold score: 1 when delta << -threshold, 0 when delta >> -threshold
-    # sigmoid((-delta_k - cold_threshold_k) / temperature)
     cold_score = torch.sigmoid((-delta_k - cold_threshold_k) / temperature)
 
     return cold_score.mean()

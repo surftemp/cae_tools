@@ -1301,12 +1301,13 @@ class UNET(BaseModel):
         high_res_centered = high_res_flat - mean_high_res
 
         # compute standard deviations
-        std_decoded = torch.std(decoded_data_centered, dim=2, keepdim=True)
+        std_decoded = torch.std(decoded_data_centered, dim=2, keepdim=True) 
         std_high_res = torch.std(high_res_centered, dim=2, keepdim=True)
 
         # normalize by dividing by the standard deviation
-        decoded_data_normalized = decoded_data_centered / std_decoded
-        high_res_normalized = high_res_centered / std_high_res
+        eps = 1e-8  # safe-guard 
+        decoded_data_normalized = decoded_data_centered / (std_decoded + eps)
+        high_res_normalized = high_res_centered / (std_high_res + eps)
 
         # Pearson correlation
         correlation = torch.mean(decoded_data_normalized * high_res_normalized, dim=2)

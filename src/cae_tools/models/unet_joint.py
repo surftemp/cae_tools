@@ -14,6 +14,12 @@ Checkpoint format:
   - UNET saved in standard format (apply_cae compatible) via unet.save()
   - CN weights + both optimizer/scheduler states saved in joint_state/ subdir
   - Continue-training restores both
+
+v2 changes:
+  - All CN diagnostics epoch-accumulated (not single-batch snapshots)
+  - Speed: AMP, DataLoader workers, non_blocking, torch.compile
+  - cold% printed at :.6f precision
+  - CN v2: no cold prior, uniform identity loss, local gradient feature
 """
 
 import os
@@ -54,14 +60,13 @@ class JointUNET:
         cn_type='conv',
         cn_base_channels=32,
         cn_n_conv_layers=4,
-        cn_cold_threshold_norm=0.3,
         lambda_sparsity=0.01,
         lambda_cold=0.1,
         cold_threshold_k=10.0,
         cn_lr=0.0001,
         lambda_mmd=0.1,
-        lambda_identity=0.1,
-        max_mask_fraction=0.35,
+        lambda_identity=1.0,
+        max_mask_fraction=0.05,
         lambda_mask_cap=1.0,
     ):
         self.unet = unet
@@ -75,7 +80,6 @@ class JointUNET:
             static_channel_indices=CN_STATIC_CHANNEL_INDICES,
             base_channels=cn_base_channels,
             n_conv_layers=cn_n_conv_layers,
-            cold_threshold_norm=cn_cold_threshold_norm,
             lambda_sparsity=lambda_sparsity,
             lambda_identity=lambda_identity,
             max_mask_fraction=max_mask_fraction,
@@ -118,47 +122,6 @@ class JointUNET:
         era5_k = era5_norm.detach() * (era5_max - era5_min) + era5_min
         cold = (pred_k < (era5_k - self.cold_threshold_k)).float().mean().item()
         return cold * 100.0
-
-    def _cn_diagnostics(self, lst_raw_norm, lst_cn, era5_norm):
-        """CN-specific diagnostics from last train batch."""
-        norm_params = self.unet.normalisation_parameters
-        if isinstance(norm_params, list):
-            min_out  = norm_params[2].get('ST_slices', list(norm_params[2].values())[0])
-            max_out  = norm_params[3].get('ST_slices', list(norm_params[3].values())[0])
-            era5_min = norm_params[0]['era5_skt']
-            era5_max = norm_params[1]['era5_skt']
-        else:
-            min_out  = norm_params['min_output']
-            max_out  = norm_params['max_output']
-            era5_min = norm_params['min_inputs']['era5_skt']
-            era5_max = norm_params['max_inputs']['era5_skt']
-
-        with torch.no_grad():
-            correction = (lst_cn - lst_raw_norm).detach()
-            abs_corr = correction.abs()
-
-            lst_raw_k = lst_raw_norm.detach() * (max_out - min_out) + min_out
-            lst_cn_k  = lst_cn.detach()        * (max_out - min_out) + min_out
-            era5_k    = era5_norm.detach()     * (era5_max - era5_min) + era5_min
-
-            raw_cold = (lst_raw_k < (era5_k - self.cold_threshold_k))
-            n_raw_cold = raw_cold.float().sum().item()
-            if n_raw_cold > 0:
-                lifted = raw_cold & (lst_cn_k >= (era5_k - self.cold_threshold_k))
-                cold_removed_pct = lifted.float().sum().item() / n_raw_cold * 100.0
-            else:
-                cold_removed_pct = 100.0
-
-            correction_k = correction * (max_out - min_out)
-
-        return {
-            'lst_cn_mean_delta_k':      correction_k.mean().item(),
-            'cn_mean_correction_k':     correction_k.abs().mean().item(),
-            'cn_max_correction_k':      correction_k.abs().max().item(),
-            'cn_pct_active':            (abs_corr > 0.01).float().mean().item() * 100.0,
-            'cn_cold_removed_pct':      cold_removed_pct,
-            'n_raw_cold_pixels':        n_raw_cold,
-        }
 
     def train_joint(
         self,
@@ -247,6 +210,12 @@ class JointUNET:
         device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         print(f"Running on device: {device}")
 
+        # ---- AMP ----
+        use_amp = (device.type == 'cuda')
+        scaler = torch.amp.GradScaler('cuda', enabled=use_amp)
+        if use_amp:
+            print("AMP enabled (fp16 forward/backward with GradScaler)")
+
         if self.unet.architecture == 'flow_matching':
             self.unet.flow_model.to(device)
         else:
@@ -254,17 +223,32 @@ class JointUNET:
             self.unet.decoder.to(device)
         self.cn = self.cn.to(device)
 
+        # ---- torch.compile ----
+        if hasattr(torch, 'compile') and device.type == 'cuda':
+            try:
+                if self.unet.architecture != 'flow_matching':
+                    self.unet.encoder = torch.compile(self.unet.encoder)
+                    self.unet.decoder = torch.compile(self.unet.decoder)
+                else:
+                    self.unet.flow_model = torch.compile(self.unet.flow_model)
+                self.cn = torch.compile(self.cn)
+                print("torch.compile enabled for encoder, decoder, CN")
+            except Exception as e:
+                print(f"torch.compile failed ({e}), continuing without it")
+
         os.makedirs(model_folder, exist_ok=True)
 
         # ---- DataLoaders ----
         train_loader = torch.utils.data.DataLoader(
-            train_ds, batch_size=batch_size, shuffle=True
+            train_ds, batch_size=batch_size, shuffle=True,
+            num_workers=4, pin_memory=True, persistent_workers=True
         )
         test_loader = torch.utils.data.DataLoader(
-            test_ds, batch_size=batch_size, shuffle=True
+            test_ds, batch_size=batch_size, shuffle=True,
+            num_workers=2, pin_memory=True, persistent_workers=True
         )
 
-        # ---- Optimizers (AdamW matching unet.py) ----
+        # ---- Optimizers ----
         if self.unet.architecture == 'flow_matching':
             unet_params = list(self.unet.flow_model.parameters())
         else:
@@ -278,7 +262,7 @@ class JointUNET:
             self.cn.parameters(), lr=self.cn_lr, weight_decay=self.unet.weight_decay
         )
 
-        # ---- Schedulers (same T_max logic as unet.py) ----
+        # ---- Schedulers ----
         epochs_already_done = self.unet.history.get('nr_epochs', 0)
         if 'total_nr_epochs' not in self.unet.history:
             self.unet.history['total_nr_epochs'] = nr_epochs
@@ -294,7 +278,7 @@ class JointUNET:
         cn_scheduler = optim.lr_scheduler.CosineAnnealingLR(
             cn_optimizer, T_max=T_max, eta_min=1e-6
         )
-        self.unet._scheduler = unet_scheduler  # so unet.save() can persist it
+        self.unet._scheduler = unet_scheduler
 
         # ---- Restore optimizer/scheduler states if continuing ----
         if getattr(self.unet, '_saved_optimizer_state_path', None):
@@ -325,13 +309,28 @@ class JointUNET:
                 torch.load(cn_sch_path, map_location=device)
             )
 
-        # ---- EMA tracking (same as unet.py, persisted in history) ----
+        # ---- EMA tracking ----
         _ema_test       = self.unet.history.get('_ema_test_mse', None)
         _best_ema_test  = self.unet.history.get('_best_ema_test_mse', float('inf'))
         _ema_ratio      = self.unet.history.get('_ema_ratio', None)
         _best_ema_ratio = self.unet.history.get('_best_train_test_ratio', float('inf'))
 
-        # ---- SIGTERM handler (same pattern as unet.py) ----
+        # ---- Pre-extract norm constants ----
+        _np = self.unet.normalisation_parameters
+        if isinstance(_np, list):
+            _min_out  = _np[2].get('ST_slices', list(_np[2].values())[0])
+            _max_out  = _np[3].get('ST_slices', list(_np[3].values())[0])
+            _era5_min = _np[0]['era5_skt']
+            _era5_max = _np[1]['era5_skt']
+        else:
+            _min_out  = _np['min_output']
+            _max_out  = _np['max_output']
+            _era5_min = _np['min_inputs']['era5_skt']
+            _era5_max = _np['max_inputs']['era5_skt']
+        _out_range  = _max_out - _min_out
+        _era5_range = _era5_max - _era5_min
+
+        # ---- SIGTERM handler ----
         self.unet._sigterm_received = False
         def _handle_sigterm(signum, frame):
             print("\n[SIGTERM received] finishing current epoch then saving...")
@@ -341,21 +340,13 @@ class JointUNET:
         self.unet.loss_fn = torch.nn.MSELoss()
         start = time.time()
 
-
-        _np = self.unet.normalisation_parameters
-        min_out  = _np['min_output']
-        max_out  = _np['max_output']
-        era5_min = _np['min_inputs']['era5_skt']
-        era5_max = _np['max_inputs']['era5_skt']
-        
-
         # ---- Training loop ----
         try:
             for epoch in range(epochs_this_job):
                 global_epoch = epochs_already_done + epoch
 
                 # ============================================================
-                # TRAIN PASS — full joint graph, single backward
+                # TRAIN PASS
                 # ============================================================
                 if self.unet.architecture == 'flow_matching':
                     self.unet.flow_model.train()
@@ -366,26 +357,30 @@ class JointUNET:
 
                 train_loss_sum  = 0.0
                 l_main_sum = l_cn_sum = l_reg_sum = l_cold_sum = l_pearson_sum = l_mmd_sum = l_identity_sum = l_mask_cap_sum = 0.0
-                hard_cold_train_sum = 0.0
                 n_batches = 0
 
-                last_lst_raw = last_lst_cn = last_era5 = last_pred = None
-                total_raw_cold = torch.tensor(0, device=device)
-                total_lifted = torch.tensor(0, device=device)
-                
-                for batch in train_loader:
-                    # DataLoader yields (inputs, targets, labels) — 3 items
-                    inputs, targets, _ = batch
-                    inputs  = inputs.to(device)
-                    targets = targets.to(device)
+                # Epoch-accumulated CN diagnostics (all stay on GPU until print)
+                total_raw_cold     = torch.tensor(0, device=device)
+                total_lifted       = torch.tensor(0, device=device)
+                total_correction_k = torch.tensor(0.0, device=device)
+                total_abs_corr_k   = torch.tensor(0.0, device=device)
+                total_max_corr_k   = torch.tensor(0.0, device=device)
+                total_active       = torch.tensor(0, device=device)
+                total_pixels       = torch.tensor(0, device=device)
 
-                    unet_optimizer.zero_grad()
-                    cn_optimizer.zero_grad()
+                last_lst_raw = last_lst_cn = last_era5 = last_pred = None
+
+                for batch in train_loader:
+                    inputs, targets, _ = batch
+                    inputs  = inputs.to(device, non_blocking=True)
+                    targets = targets.to(device, non_blocking=True)
+
+                    unet_optimizer.zero_grad(set_to_none=True)
+                    cn_optimizer.zero_grad(set_to_none=True)
 
                     lst_raw_norm = targets
                     era5_norm    = self._get_era5(inputs)
 
-                    # Augmentation (uses module-level augment_batch from unet.py)
                     if self.unet.augment:
                         inputs, lst_raw_norm = augment_batch(
                             inputs, lst_raw_norm,
@@ -393,45 +388,34 @@ class JointUNET:
                         )
                         era5_norm = self._get_era5(inputs)
 
-                    # CN forward (graph alive)
-                    lst_cn = self.cn(inputs, lst_raw_norm, era5_norm)
+                    with torch.amp.autocast('cuda', enabled=use_amp):
+                        lst_cn = self.cn(inputs, lst_raw_norm, era5_norm)
+                        pred = self._unet_forward(inputs)
 
-                    # UNET forward
-                    pred = self._unet_forward(inputs)
+                        l_mse  = self.unet.loss_fn(pred, lst_cn)
+                        pearson_corr = self.unet.pearson_corr_torch(pred, lst_cn)
+                        l_pearson = self.unet.lambda_pearson * (1 - torch.mean(pearson_corr))
+                        l_main = l_mse + l_pearson
+                        l_reg  = self.cn.get_regularisation_loss()
+                        l_cold = self.lambda_cold * soft_cold_pixel_rate(
+                            pred, era5_norm, self.unet.normalisation_parameters,
+                            cold_threshold_k=self.cold_threshold_k
+                        )
+                        mask_m = self.cn.get_last_mask()
+                        l_mmd = mmd_loss_batch(lst_cn, mask_m, self.lambda_mmd)
+                        l_identity = self.cn.get_identity_loss()
+                        l_mask_cap = self.cn.get_mask_cap_loss()
+                        l_cn_total = l_reg + l_cold + l_mmd + l_identity + l_mask_cap
+                        l_total    = l_main + l_cn_total
 
-                    # Losses
-                    l_mse  = self.unet.loss_fn(pred, lst_cn)
-                    # Pearson loss on (pred, lst_cn) — same as standalone UNET.
-                    # Kept deliberately: removing it would conflate "joint training works"
-                    # with "Pearson was causing harm", making the comparison unfair.
-                    pearson_corr = self.unet.pearson_corr_torch(pred, lst_cn)
-                    l_pearson = self.unet.lambda_pearson * (1 - torch.mean(pearson_corr))
-                    l_main = l_mse + l_pearson
-                    l_reg  = self.cn.get_regularisation_loss()
-                    l_cold = self.lambda_cold * soft_cold_pixel_rate(
-                        pred, era5_norm, self.unet.normalisation_parameters,
-                        cold_threshold_k=self.cold_threshold_k
-                    )
-                    # MMD: corrected pixels (M>0.5) vs untouched pixels (M<0.5)
-                    # within each box — enforces corrected values are statistically
-                    # consistent with the local LST field
-                    mask_m = self.cn.get_last_mask()
-                    l_mmd = mmd_loss_batch(lst_cn, mask_m, self.lambda_mmd)
-                    # Identity preservation: CN must not correct warm (non-suspect) pixels
-                    # Blocks degenerate solution of flattening the whole field
-                    l_identity = self.cn.get_identity_loss()
-                    # Mask cap: soft quadratic penalty when mean(M) > max_mask_fraction
-                    l_mask_cap = self.cn.get_mask_cap_loss()
-                    l_cn_total = l_reg + l_cold + l_mmd + l_identity + l_mask_cap
-                    l_total    = l_main + l_cn_total
-
-                    l_total.backward()
-
+                    scaler.scale(l_total).backward()
+                    scaler.unscale_(unet_optimizer)
+                    scaler.unscale_(cn_optimizer)
                     torch.nn.utils.clip_grad_norm_(unet_params, max_norm=1.0)
                     torch.nn.utils.clip_grad_norm_(self.cn.parameters(), max_norm=1.0)
-
-                    unet_optimizer.step()
-                    cn_optimizer.step()
+                    scaler.step(unet_optimizer)
+                    scaler.step(cn_optimizer)
+                    scaler.update()
 
                     train_loss_sum      += l_main.item()
                     l_main_sum          += l_main.item()
@@ -442,17 +426,29 @@ class JointUNET:
                     l_cn_sum            += l_cn_total.item()
                     l_reg_sum           += l_reg.item()
                     l_cold_sum          += l_cold.item()
-                    hard_cold_train_sum += self._hard_cold_pct(pred, era5_norm)
                     n_batches           += 1
 
+                    # Accumulate CN diagnostics on GPU (no .item() per batch)
+                    with torch.no_grad():
+                        _lst_cn_d = lst_cn.detach()
+                        _corr_k = (_lst_cn_d - lst_raw_norm) * _out_range
+                        _abs_ck = _corr_k.abs()
+                        total_correction_k += _corr_k.sum()
+                        total_abs_corr_k   += _abs_ck.sum()
+                        total_max_corr_k    = torch.max(total_max_corr_k, _abs_ck.max())
+                        total_active       += (_abs_ck > (0.01 * _out_range)).sum()
+                        total_pixels       += _corr_k.numel()
+
+                        _lst_raw_k = lst_raw_norm * _out_range + _min_out
+                        _era5_k    = era5_norm * _era5_range + _era5_min
+                        _rc = (_lst_raw_k < (_era5_k - self.cold_threshold_k))
+                        total_raw_cold += _rc.sum()
+                        total_lifted   += (_rc & ((_lst_cn_d * _out_range + _min_out) >= (_era5_k - self.cold_threshold_k))).sum()
+
                     last_lst_raw = lst_raw_norm.detach()
-                    last_lst_cn  = lst_cn.detach()
+                    last_lst_cn  = _lst_cn_d
                     last_era5    = era5_norm.detach()
                     last_pred    = pred.detach()
-                    with torch.no_grad():
-                        _rc = (lst_raw_norm * (max_out - min_out) + min_out) < (era5_norm * (era5_max - era5_min) + era5_min - self.cold_threshold_k)
-                        total_raw_cold += _rc.sum()
-                        total_lifted += (_rc & ((lst_cn.detach() * (max_out - min_out) + min_out) >= (era5_norm * (era5_max - era5_min) + era5_min - self.cold_threshold_k))).sum()
 
                 train_loss = train_loss_sum / max(n_batches, 1)
 
@@ -479,23 +475,24 @@ class JointUNET:
                     with torch.no_grad():
                         for batch in test_loader:
                             inputs, targets, _ = batch
-                            inputs  = inputs.to(device)
-                            targets = targets.to(device)
+                            inputs  = inputs.to(device, non_blocking=True)
+                            targets = targets.to(device, non_blocking=True)
                             era5_t  = self._get_era5(inputs)
-                            pred    = self._unet_forward(inputs)
-                            # Test MSE and Pearson vs RAW LST — comparable to standalone UNET
-                            test_loss_sum      += self.unet.loss_fn(pred, targets).item()
-                            pearson_corr_t      = self.unet.pearson_corr_torch(pred, targets)
+                            with torch.amp.autocast('cuda', enabled=use_amp):
+                                pred = self._unet_forward(inputs)
+                            pred_f32 = pred.float()
+                            test_loss_sum      += self.unet.loss_fn(pred_f32, targets).item()
+                            pearson_corr_t      = self.unet.pearson_corr_torch(pred_f32, targets)
                             test_pearson_sum   += (1 - torch.mean(pearson_corr_t)).item()
-                            hard_cold_test_sum += self._hard_cold_pct(pred, era5_t)
+                            hard_cold_test_sum += self._hard_cold_pct(pred_f32, era5_t)
                             n_test += 1
 
                     test_loss = test_loss_sum / max(n_test, 1)
                     test_pearson_loss = test_pearson_sum / max(n_test, 1)
                     hard_cold_test_pct  = hard_cold_test_sum  / max(n_test, 1)
-                    hard_cold_train_pct = hard_cold_train_sum / max(n_batches, 1)
+                    hard_cold_train_pct = self._hard_cold_pct(last_pred, last_era5) if last_pred is not None else 0.0
 
-                    # EMA (same as unet.py)
+                    # EMA
                     if _ema_test is None:
                         _ema_test = test_loss
                     else:
@@ -507,8 +504,15 @@ class JointUNET:
                     else:
                         _ema_ratio = EMA_ALPHA * ratio + (1 - EMA_ALPHA) * _ema_ratio
 
-                    # CN diagnostics from last train batch
-                    cn_diag = self._cn_diagnostics(last_lst_raw, last_lst_cn, last_era5)
+                    # Epoch-accumulated CN diagnostics (single GPU->CPU sync)
+                    _trc        = total_raw_cold.item()
+                    _tli        = total_lifted.item()
+                    _tpx        = max(total_pixels.item(), 1)
+                    _mean_dk    = total_correction_k.item() / _tpx
+                    _mean_abs_k = total_abs_corr_k.item() / _tpx
+                    _max_abs_k  = total_max_corr_k.item()
+                    _pct_active = total_active.item() / _tpx * 100.0
+                    _lifted_pct = (_tli / _trc * 100.0) if _trc > 0 else 100.0
 
                     avg = lambda s: s / max(n_batches, 1)
                     lr_unet = unet_optimizer.param_groups[0]['lr']
@@ -528,20 +532,17 @@ class JointUNET:
                     print(f"  mse:        train={train_loss:.6f}  test={test_loss:.6f}  "
                           f"ema_test={_ema_test:.6f}  ema_ratio={_ema_ratio:.3f}  "
                           f"test_pearson={test_pearson_loss:.4f}")
-                    print(f"  cold%:      train={hard_cold_train_pct:.4f}%  "
-                          f"test={hard_cold_test_pct:.4f}%")
-                    print(f"  CN target:  mean_delta={cn_diag['lst_cn_mean_delta_k']:+.2f}K")
-                    print(f"  CN corr:    mean={cn_diag['cn_mean_correction_k']:.3f}K  "
-                          f"max={cn_diag['cn_max_correction_k']:.3f}K  "
-                          f"pct_active={cn_diag['cn_pct_active']:.1f}%")
-                    _trc = total_raw_cold.item()
-                    _tli = total_lifted.item()
-                    _lifted_pct = (_tli / _trc * 100.0) if _trc > 0 else 100.0
+                    print(f"  cold%:      train={hard_cold_train_pct:.6f}%  "
+                          f"test={hard_cold_test_pct:.6f}%")
+                    print(f"  CN target:  mean_delta={_mean_dk:+.4f}K  (epoch-avg)")
+                    print(f"  CN corr:    mean={_mean_abs_k:.4f}K  "
+                          f"max={_max_abs_k:.3f}K  "
+                          f"pct_active={_pct_active:.2f}%  (epoch-avg)")
                     print(f"  CN cold:    raw_cold_px={_trc:.0f}  "
                           f"lifted={_lifted_pct:.1f}%  (epoch-total)")
                     print(f"  lr:         unet={lr_unet:.2e}  cn={lr_cn:.2e}")
 
-                    # Update history (use train_loss/test_loss to match unet.py)
+                    # Update history
                     h = self.unet.history
                     h.setdefault('train_loss', []).append(float(train_loss))
                     h.setdefault('test_loss',       []).append(float(test_loss))
@@ -556,9 +557,9 @@ class JointUNET:
                     h.setdefault('l_cold',      []).append(float(avg(l_cold_sum)))
                     h.setdefault('hard_cold_test_pct',  []).append(float(hard_cold_test_pct))
                     h.setdefault('hard_cold_train_pct', []).append(float(hard_cold_train_pct))
-                    h.setdefault('cn_mean_correction_k',[]).append(float(cn_diag['cn_mean_correction_k']))
-                    h.setdefault('cn_pct_active',       []).append(float(cn_diag['cn_pct_active']))
-                    h.setdefault('cn_cold_removed_pct', []).append(float(cn_diag['cn_cold_removed_pct']))
+                    h.setdefault('cn_mean_correction_k',[]).append(float(_mean_abs_k))
+                    h.setdefault('cn_pct_active',       []).append(float(_pct_active))
+                    h.setdefault('cn_cold_removed_pct', []).append(float(_lifted_pct))
                     h['_ema_test_mse']          = float(_ema_test)
                     h['_ema_ratio']             = float(_ema_ratio)
                     h['nr_epochs']              = global_epoch + 1
@@ -640,7 +641,6 @@ class JointUNET:
             'static_channel_indices': self.cn.static_channel_indices,
             'base_channels':         self.cn.net[0].out_channels
                                      if hasattr(self.cn.net[0], 'out_channels') else 32,
-            'cold_threshold_norm':   self.cn.cold_threshold_norm,
             'lambda_sparsity':       self.cn.lambda_sparsity,
             'lambda_cold':           self.lambda_cold,
             'cold_threshold_k':      self.cold_threshold_k,
@@ -686,7 +686,6 @@ def load_joint_unet_for_continue(model_folder):
         unet=unet,
         cn_type=jc.get('cn_type', 'conv'),
         cn_base_channels=jc.get('base_channels', 32),
-        cn_cold_threshold_norm=jc.get('cold_threshold_norm', 0.3),
         lambda_sparsity=jc.get('lambda_sparsity', 0.01),
         lambda_cold=jc.get('lambda_cold', 0.1),
         cold_threshold_k=jc.get('cold_threshold_k', 10.0),

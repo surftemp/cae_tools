@@ -1,32 +1,38 @@
+"""
+CLI entry point for joint Flow CN v3 + UNET training.
+
+Usage:
+  train_cae_joint_v3 --train-inputs ... --test-inputs ... --model-folder ...
+
+Add to setup.py console_scripts:
+  train_cae_joint_v3=cae_tools.cli.train_cae_joint_v3:main
+"""
+
 import argparse
 import json
 import os
-import uuid
 
 from cae_tools.models.unet import UNET
 from cae_tools.models.preprocessed_dataset import PreprocessedDataset
-from cae_tools.models.unet_joint import JointUNET, load_joint_unet_for_continue
+from cae_tools.models.unet_joint_v3 import JointUNETv3, load_joint_v3_for_continue
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Joint Flow CN v3 + UNET training with learned loss balancing"
+    )
 
-    parser = argparse.ArgumentParser()
+    # ---- Data ----
+    parser.add_argument("--train-inputs", nargs="+", required=True)
+    parser.add_argument("--test-inputs", nargs="+", required=True)
+    parser.add_argument("--model-folder", required=True)
+    parser.add_argument("--continue-training", action="store_true")
 
-    # ---- Data (always preprocessed .pt — no netCDF mode for joint training) ----
-    parser.add_argument("--train-inputs", nargs="+", required=True,
-                        help="path to preprocessed training .pt file")
-    parser.add_argument("--test-inputs", nargs="+", required=True,
-                        help="path to preprocessed test .pt file")
-    parser.add_argument("--model-folder", required=True,
-                        help="folder to save the trained model to")
-    parser.add_argument("--continue-training", action="store_true",
-                        help="continue training from model-folder")
-
-    # ---- UNET args — identical to train_cae.py ----
+    # ---- UNET args ----
     parser.add_argument("--nr-epochs", type=int, default=3500)
-    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=0.0003)
-    parser.add_argument("--lambda-pearson", type=float, default=0.0)
+    parser.add_argument("--lambda-pearson", type=float, default=0.0005)
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--dropout-rate", type=float, default=0.1)
     parser.add_argument("--latent-size", type=int, default=4)
@@ -36,14 +42,12 @@ def main():
     parser.add_argument("--skip-mode", type=str, choices=["concat", "add"], default="concat")
     parser.add_argument("--skip-dropout", type=float, default=0.0)
     parser.add_argument("--skip-scale", type=float, default=1.0)
-    parser.add_argument("--latent-activation", type=str,
-                        choices=["relu", "leaky_relu", "none"], default="relu")
-    parser.add_argument("--output-activation", type=str,
-                        choices=["sigmoid", "tanh", "none"], default="none")
+    parser.add_argument("--latent-activation", type=str, default="relu")
+    parser.add_argument("--output-activation", type=str, default="none")
     parser.add_argument("--predict-delta", action="store_true", default=False)
     parser.add_argument("--delta-reference-channel", type=str, default=None)
-    parser.add_argument("--architecture", type=str,
-                        choices=["legacy", "standard", "flow_matching"], default="standard")
+    parser.add_argument("--architecture", type=str, default="standard",
+                        choices=["legacy", "standard", "flow_matching"])
     parser.add_argument("--base-channels", type=int, default=64)
     parser.add_argument("--flow-steps", type=int, default=4)
     parser.add_argument("--augment", action="store_true", default=False)
@@ -53,22 +57,24 @@ def main():
     parser.add_argument("--layer-definitions-path", default=None)
     parser.add_argument("--model-id", type=str, default=None)
 
-    # ---- CN-specific args ----
+    # ---- CN v3 flow args ----
     parser.add_argument("--cn-base-channels", type=int, default=32)
-    parser.add_argument("--cn-n-conv-layers", type=int, default=4)
-    parser.add_argument("--cn-cold-threshold-norm", type=float, default=0.3)
-    parser.add_argument("--lambda-sparsity", type=float, default=0.01)
+    parser.add_argument("--cn-dropout-rate", type=float, default=0.0)
+    parser.add_argument("--cn-lr", type=float, default=0.0001)
+    parser.add_argument("--cn-pretrain-min-epochs", type=int, default=10)
+    parser.add_argument("--cn-pretrain-max-epochs", type=int, default=200)
+    parser.add_argument("--cn-convergence-threshold", type=float, default=0.01)
+    parser.add_argument("--cn-convergence-window", type=int, default=5)
     parser.add_argument("--lambda-cold", type=float, default=0.1)
     parser.add_argument("--cold-threshold-k", type=float, default=10.0)
-    parser.add_argument("--cn-lr", type=float, default=0.0001)
-    parser.add_argument("--lambda-mmd", type=float, default=0.1)
-    parser.add_argument("--lambda-identity", type=float, default=0.1)
-    parser.add_argument("--max-mask-fraction", type=float, default=0.35)
-    parser.add_argument("--lambda-mask-cap", type=float, default=1.0)
+    parser.add_argument("--lambda-subgroup", type=float, default=0.1)
+    parser.add_argument("--flow-n-coupling-layers", type=int, default=4)
+    parser.add_argument("--flow-coupling-hidden", type=int, default=32)
+    parser.add_argument("--flow-nll-threshold", type=float, default=5.0)
 
     args = parser.parse_args()
 
-    # ---- Load datasets (same as train_cae.py preprocessed path) ----
+    # ---- Load datasets ----
     print("Loading preprocessed data...")
     train_ds = PreprocessedDataset(args.train_inputs[0])
     test_ds = PreprocessedDataset(args.test_inputs[0])
@@ -79,20 +85,14 @@ def main():
 
     # ---- Build or restore model ----
     if args.continue_training:
-        # Load existing joint model — same pattern as train_cae.py continue path
-        parameters_path = os.path.join(args.model_folder, "parameters.json")
-        with open(parameters_path) as f:
-            parameters = json.loads(f.read())
-
-        joint = load_joint_unet_for_continue(args.model_folder)
+        joint = load_joint_v3_for_continue(args.model_folder)
 
         already_done = joint.unet.history.get('nr_epochs', 0)
         total_target = args.nr_epochs
         remaining = max(0, total_target - already_done)
-        print(f"Continue training: {already_done} done, target {total_target}, "
-              f"running {remaining} this job")
+        print(f"Continue: {already_done} done, target {total_target}, "
+              f"running {remaining}")
 
-        # Update mutable training params (same as train_cae.py)
         joint.unet.nr_epochs = remaining
         joint.unet.history['total_nr_epochs'] = total_target
         joint.unet.lr = args.learning_rate
@@ -100,15 +100,10 @@ def main():
         joint.unet.checkpoint_interval = args.checkpoint_interval
         joint.unet.lambda_pearson = args.lambda_pearson
         joint.lambda_cold = args.lambda_cold
-        joint.lambda_mmd  = args.lambda_mmd
-        joint.cn.lambda_identity  = args.lambda_identity
-        joint.cn.max_mask_fraction = args.max_mask_fraction
-        joint.cn.lambda_mask_cap  = args.lambda_mask_cap
+        joint.lambda_subgroup = args.lambda_subgroup
 
         nr_epochs_this_job = remaining
-
     else:
-        # Fresh run — construct UNET exactly like train_cae.py does
         from cae_tools.models.model_sizer import ModelSpec
 
         mt = UNET(
@@ -147,18 +142,21 @@ def main():
                 spec.load(json.loads(f.read()))
                 mt.spec = spec
 
-        joint = JointUNET(
+        joint = JointUNETv3(
             unet=mt,
             cn_base_channels=args.cn_base_channels,
-            cn_n_conv_layers=args.cn_n_conv_layers,
-            lambda_sparsity=args.lambda_sparsity,
-            lambda_identity=args.lambda_identity,
-            max_mask_fraction=args.max_mask_fraction,
-            lambda_mask_cap=args.lambda_mask_cap,
+            cn_dropout_rate=args.cn_dropout_rate,
+            cn_lr=args.cn_lr,
+            cn_pretrain_min_epochs=args.cn_pretrain_min_epochs,
+            cn_pretrain_max_epochs=args.cn_pretrain_max_epochs,
+            cn_convergence_threshold=args.cn_convergence_threshold,
+            cn_convergence_window=args.cn_convergence_window,
             lambda_cold=args.lambda_cold,
             cold_threshold_k=args.cold_threshold_k,
-            cn_lr=args.cn_lr,
-            lambda_mmd=args.lambda_mmd,
+            lambda_subgroup=args.lambda_subgroup,
+            flow_n_coupling_layers=args.flow_n_coupling_layers,
+            flow_coupling_hidden=args.flow_coupling_hidden,
+            flow_nll_threshold=args.flow_nll_threshold,
         )
 
         nr_epochs_this_job = args.nr_epochs

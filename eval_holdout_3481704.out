@@ -1,0 +1,147 @@
+============================================
+Holdout Evaluation Suite
+Model: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+Output: /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval
+============================================
+
+>>> Evaluating VALIDATION set...
+Using device: cpu
+Loading data: /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/validation_v8_zscore_rm_coldpattern.pt
+  Loaded 9733 boxes in 7.9s
+  Input shape: torch.Size([9733, 11, 100, 100]), Output shape: torch.Size([9733, 1, 100, 100])
+  Output activation: sigmoid
+  Input variables: ['land_cover', 'albedo_monthly_climatology_means', 'elevation', 'era5_skt', 'sin_doy', 'cos_doy', 'slope_magnitude', 'slope_direction', 'urban_area', 'suburban_area', 'pixel_st_hot_pattern']
+
+Loading model: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+Found saved optimizer state at /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse/optimizer.state
+Found saved scheduler state at /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse/scheduler.state
+  Architecture: standard
+  Input shape: (11, 100, 100), Output shape: (1, 100, 100)
+
+Running inference on 9733 boxes (batch_size=256)...
+  Inference: 256/9733 boxes (3%)
+  Inference: 2816/9733 boxes (29%)
+  Inference: 5376/9733 boxes (55%)
+  Inference: 7936/9733 boxes (82%)
+  Inference complete in 1201.2s
+
+Denormalizing to Kelvin...
+  Prediction range: [271.6K, 339.0K]
+  Target range:     [262.4K, 331.1K]
+
+Computing metrics...
+
+============================================
+EVALUATION RESULTS: validation_2023
+============================================
+Model:      model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+Data:       validation_v8_zscore_rm_coldpattern.pt
+Boxes:      9733
+Pixels:     97,330,000
+Device:     cpu
+--------------------------------------------
+ME  (bias):     -0.0873 K
+MAE:            1.9229 K
+RMSE:           2.5548 K
+Median Error:   -0.1142 K
+STD(error):     2.5533 K
+RSTD(error):    2.1920 K
+R²:             0.917392
+Pearson R:      0.958471
+--------------------------------------------
+P5  error:      -4.169 K
+P25 error:      -1.590 K
+P75 error:      +1.367 K
+P95 error:      +4.114 K
+--------------------------------------------
+Mean pred:      298.13 K
+Mean target:    298.21 K
+Pred range:     [271.6, 339.0] K
+Target range:   [262.4, 331.1] K
+--------------------------------------------
+Cold pixels (<280K):  5,141,724 (5.28%)
+Cold boxes (<280K):   512 / 9733 (5.3%)
+============================================
+
+Results JSON saved to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/validation_results.json
+Text summary saved to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/validation_results.txt
+Summary figure saved to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/figures_validation/summary_validation_2023.png
+
+Generating 24 comparison figures in /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/figures_validation//
+  Figures: 8/24
+  Figures: 16/24
+  Figures: 24/24
+  Saved 24 comparison figures to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/figures_validation//
+
+>>> Evaluating TEST set...
+Using device: cpu
+Loading data: /gws/nopw/j04/eocis_chuk/shaerdan/preprocessed_v8/test_v8_zscore_rm_coldpattern.pt
+  Loaded 8732 boxes in 5.8s
+  Input shape: torch.Size([8732, 11, 100, 100]), Output shape: torch.Size([8732, 1, 100, 100])
+  Output activation: sigmoid
+  Input variables: ['land_cover', 'albedo_monthly_climatology_means', 'elevation', 'era5_skt', 'sin_doy', 'cos_doy', 'slope_magnitude', 'slope_direction', 'urban_area', 'suburban_area', 'pixel_st_hot_pattern']
+
+Loading model: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+Found saved optimizer state at /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse/optimizer.state
+Found saved scheduler state at /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse/scheduler.state
+  Architecture: standard
+  Input shape: (11, 100, 100), Output shape: (1, 100, 100)
+
+Running inference on 8732 boxes (batch_size=256)...
+  Inference: 256/8732 boxes (3%)
+  Inference: 2816/8732 boxes (32%)
+  Inference: 5376/8732 boxes (62%)
+  Inference: 7936/8732 boxes (91%)
+  Inference complete in 1130.0s
+
+Denormalizing to Kelvin...
+  Prediction range: [268.8K, 339.3K]
+  Target range:     [269.8K, 343.3K]
+
+Computing metrics...
+
+============================================
+EVALUATION RESULTS: test
+============================================
+Model:      model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
+Data:       test_v8_zscore_rm_coldpattern.pt
+Boxes:      8732
+Pixels:     87,320,000
+Device:     cpu
+--------------------------------------------
+ME  (bias):     +0.1502 K
+MAE:            1.8895 K
+RMSE:           2.4835 K
+Median Error:   +0.1821 K
+STD(error):     2.4790 K
+RSTD(error):    2.1846 K
+R²:             0.879846
+Pearson R:      0.938300
+--------------------------------------------
+P5  error:      -3.973 K
+P25 error:      -1.278 K
+P75 error:      +1.669 K
+P95 error:      +4.139 K
+--------------------------------------------
+Mean pred:      296.90 K
+Mean target:    296.75 K
+Pred range:     [268.8, 339.3] K
+Target range:   [269.8, 343.3] K
+--------------------------------------------
+Cold pixels (<280K):  1,699,845 (1.95%)
+Cold boxes (<280K):   171 / 8732 (2.0%)
+============================================
+
+Results JSON saved to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/test_results.json
+Text summary saved to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/test_results.txt
+Summary figure saved to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/figures_test/summary_test.png
+
+Generating 12 comparison figures in /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/figures_test//
+  Figures: 8/12
+  Figures: 12/12
+  Saved 12 comparison figures to /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval/figures_test//
+
+============================================
+All evaluations complete. Exit code: 0
+Results in: /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval
+============================================
