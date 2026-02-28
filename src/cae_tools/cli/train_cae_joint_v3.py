@@ -1,5 +1,13 @@
 """
-CLI entry point for joint Flow CN v3 + UNET training.
+CLI for joint Flow CN v3 + UNET training with learned loss balancing.
+
+Key defaults aligned with standalone train_cae.py:
+  --output-activation sigmoid  (was 'none' — caused training divergence)
+
+CN uses soft blending (no threshold). Correction strength is determined
+entirely by the flow's learned density via the formula:
+  w = sigmoid(-0.5 * z^2)
+  lst_cn = w * target + (1 - w) * x_mean
 
 Usage:
   train_cae_joint_v3 --train-inputs ... --test-inputs ... --model-folder ...
@@ -43,7 +51,9 @@ def main():
     parser.add_argument("--skip-dropout", type=float, default=0.0)
     parser.add_argument("--skip-scale", type=float, default=1.0)
     parser.add_argument("--latent-activation", type=str, default="relu")
-    parser.add_argument("--output-activation", type=str, default="none")
+    parser.add_argument("--output-activation", type=str, default="sigmoid",
+                        choices=["sigmoid", "tanh", "none"],
+                        help="Output activation (default: sigmoid, matching standalone)")
     parser.add_argument("--predict-delta", action="store_true", default=False)
     parser.add_argument("--delta-reference-channel", type=str, default=None)
     parser.add_argument("--architecture", type=str, default="standard",
@@ -58,7 +68,7 @@ def main():
     parser.add_argument("--model-id", type=str, default=None)
 
     # ---- CN v3 flow args ----
-    parser.add_argument("--cn-base-channels", type=int, default=32)
+    parser.add_argument("--cn-base-channels", type=int, default=64)
     parser.add_argument("--cn-dropout-rate", type=float, default=0.0)
     parser.add_argument("--cn-lr", type=float, default=0.0001)
     parser.add_argument("--cn-pretrain-min-epochs", type=int, default=10)
@@ -68,9 +78,14 @@ def main():
     parser.add_argument("--lambda-cold", type=float, default=0.1)
     parser.add_argument("--cold-threshold-k", type=float, default=10.0)
     parser.add_argument("--lambda-subgroup", type=float, default=0.1)
+    parser.add_argument("--lambda-spectral", type=float, default=0.0,
+                        help="Weight for spectral (FFT) loss. 0=disabled.")
+    parser.add_argument("--spectral-every-k-epochs", type=int, default=10,
+                        help="Compute pattern losses (spectral, and for flow matching "
+                        "also Pearson/cold/subgroup) every K-th epoch. "
+                        "Default 10.")
     parser.add_argument("--flow-n-coupling-layers", type=int, default=4)
-    parser.add_argument("--flow-coupling-hidden", type=int, default=32)
-    parser.add_argument("--flow-nll-threshold", type=float, default=5.0)
+    parser.add_argument("--flow-coupling-hidden", type=int, default=64)
 
     args = parser.parse_args()
 
@@ -101,6 +116,8 @@ def main():
         joint.unet.lambda_pearson = args.lambda_pearson
         joint.lambda_cold = args.lambda_cold
         joint.lambda_subgroup = args.lambda_subgroup
+        joint.lambda_spectral = args.lambda_spectral
+        joint.spectral_every_k_epochs = args.spectral_every_k_epochs
 
         nr_epochs_this_job = remaining
     else:
@@ -154,9 +171,10 @@ def main():
             lambda_cold=args.lambda_cold,
             cold_threshold_k=args.cold_threshold_k,
             lambda_subgroup=args.lambda_subgroup,
+            lambda_spectral=args.lambda_spectral,
+            spectral_every_k_epochs=args.spectral_every_k_epochs,
             flow_n_coupling_layers=args.flow_n_coupling_layers,
             flow_coupling_hidden=args.flow_coupling_hidden,
-            flow_nll_threshold=args.flow_nll_threshold,
         )
 
         nr_epochs_this_job = args.nr_epochs
