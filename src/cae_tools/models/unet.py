@@ -5,6 +5,8 @@ from torch.utils.data import DataLoader
 import torch.optim as optim
 from cae_tools.models.standard_unet import StandardEncoder, StandardDecoder
 from cae_tools.models.flow_matching_unet import FlowMatchingUNet, flow_matching_loss, flow_matching_sample
+from cae_tools.models.conditioned_unet import ConditionedEncoder, ConditionedDecoder
+from cae_tools.models.conditioned_helpers import unpack_batch, forward_pass, split_for_scoring
 from torchvision import models
 import torch.nn.functional as F
 
@@ -15,6 +17,7 @@ import json
 import os
 import time
 import signal
+import sys
 
 from .base_model import BaseModel
 from .model_sizer import create_model_spec, ModelSpec
@@ -199,28 +202,7 @@ class Decoder(nn.Module):
             pass  # no activation, unconstrained output
         else:
             x = torch.sigmoid(x)
-        return x 
-
-    def forward(self, predicted, ground_truth):
-        predicted_3channel = predicted.repeat(1, 3, 1, 1)
-        ground_truth_3channel = ground_truth.repeat(1, 3, 1, 1)
-        
-        predicted_resized = self.resize_transform(predicted_3channel)
-        ground_truth_resized = self.resize_transform(ground_truth_3channel)
-
-        predicted_normalized = self.normalize_transform(predicted_resized)
-        ground_truth_normalized = self.normalize_transform(ground_truth_resized)
-        
-        predicted_normalized = predicted_normalized.to(self.device)
-        ground_truth_normalized = ground_truth_normalized.to(self.device)
-        
-        predicted_features = self.perceptual_encoder(predicted_normalized)
-        ground_truth_features = self.perceptual_encoder(ground_truth_normalized)
-        
-        #  perceptual loss (MSE between VGG features)
-        loss = nn.MSELoss()(predicted_features, ground_truth_features)
-
-        return loss    
+        return x  
 
 
 def augment_batch(inputs, targets, slope_dir_channel=7):
@@ -275,6 +257,73 @@ def augment_batch(inputs, targets, slope_dir_channel=7):
     return inputs, targets
 
 
+def compute_spectral_loss(pred, target):
+    """
+    Spectral loss: penalises mismatch in spatial frequency content.
+
+    Computes 2D FFT of both pred and target (each of shape (B, 1, H, W)),
+    takes the magnitude spectrum, applies log(1 + |F|) to compress dynamic
+    range so high-frequency components are not swamped by low-frequency ones,
+    then returns the mean squared difference between the two log-magnitude
+    spectra.
+    """
+    fft_pred = torch.fft.fft2(pred)
+    fft_target = torch.fft.fft2(target)
+    log_mag_pred = torch.log1p(fft_pred.abs())
+    log_mag_target = torch.log1p(fft_target.abs())
+    return F.mse_loss(log_mag_pred, log_mag_target)
+
+
+def compute_subgroup_robustness_loss(pred, target, era5_map, n_era5_bins=None,
+                                     min_samples=50):
+    """
+    Variance of per-ERA5-bin MSEs.
+
+    Quantile-bins pixels by ERA5 skin temperature, computes MSE within each
+    bin, returns the variance across bins. Penalising this encourages uniform
+    performance across temperature regimes.
+
+    Args:
+        pred: (B, 1, H, W) prediction
+        target: (B, 1, H, W) target
+        era5_map: (B, 1, H, W) ERA5 temperature map (normalised)
+        n_era5_bins: number of quantile bins (default: batch size)
+        min_samples: minimum pixels per bin to include
+
+    Returns:
+        (loss, info_dict)
+    """
+    if n_era5_bins is None:
+        n_era5_bins = pred.shape[0]
+    se = (pred - target).pow(2)
+    era5_flat = era5_map.reshape(-1)
+    se_flat = se.reshape(-1)
+
+    quantiles = torch.linspace(0, 1, n_era5_bins + 1, device=era5_map.device)
+    bin_edges = torch.quantile(era5_flat, quantiles)
+
+    subgroup_mses = []
+    for i in range(n_era5_bins):
+        lo, hi = bin_edges[i], bin_edges[i + 1]
+        if i < n_era5_bins - 1:
+            mask = (era5_flat >= lo) & (era5_flat < hi)
+        else:
+            mask = (era5_flat >= lo) & (era5_flat <= hi)
+        n = mask.sum()
+        if n >= min_samples:
+            subgroup_mses.append(se_flat[mask].mean())
+
+    if len(subgroup_mses) < 2:
+        return torch.tensor(0.0, device=pred.device), {}
+
+    subgroup_mses = torch.stack(subgroup_mses)
+    robustness_loss = subgroup_mses.var()
+    info = {f'mse_era5_bin_{i}': m.item() for i, m in enumerate(subgroup_mses)}
+    info['n_subgroups'] = len(subgroup_mses)
+    info['mse_var_across_bins'] = robustness_loss.item()
+    return robustness_loss, info
+
+
 class UNET(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
@@ -284,7 +333,10 @@ class UNET(BaseModel):
                  skip_mode='concat', skip_dropout=0.0, skip_scale=1.0, latent_activation='relu',
                  output_activation='sigmoid', predict_delta=False, delta_reference_channel=None,
                  architecture='legacy', base_channels=64, flow_steps=4,
-                 augment=False, slope_direction_channel=7):
+                 augment=False, slope_direction_channel=7, cond_dim=0,
+                 lambda_spectral=0.0, spectral_every_k_epochs=10,
+                 lambda_subgroup=0.0, lambda_cold=0.0,
+                 cold_threshold_k=10.0, era5_channel_idx=3, era5_cond_idx=0):
         """
         Create a convolutional autoencoder general model
 
@@ -350,6 +402,14 @@ class UNET(BaseModel):
         self.flow_model = None
         self.augment = augment
         self.slope_direction_channel = slope_direction_channel
+        self.cond_dim = cond_dim
+        self.lambda_spectral = lambda_spectral
+        self.spectral_every_k_epochs = spectral_every_k_epochs
+        self.lambda_subgroup = lambda_subgroup
+        self.lambda_cold = lambda_cold
+        self.cold_threshold_k = cold_threshold_k
+        self.era5_channel_idx = era5_channel_idx
+        self.era5_cond_idx = era5_cond_idx
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
 
@@ -386,6 +446,14 @@ class UNET(BaseModel):
             "flow_steps": self.flow_steps,
             "augment": self.augment,
             "slope_direction_channel": self.slope_direction_channel,
+            "cond_dim": self.cond_dim,
+            "lambda_spectral": self.lambda_spectral,
+            "spectral_every_k_epochs": self.spectral_every_k_epochs,
+            "lambda_subgroup": self.lambda_subgroup,
+            "lambda_cold": self.lambda_cold,
+            "cold_threshold_k": self.cold_threshold_k,
+            "era5_channel_idx": self.era5_channel_idx,
+            "era5_cond_idx": self.era5_cond_idx,
             "model_id": self.get_model_id()
         }
 
@@ -458,21 +526,21 @@ class UNET(BaseModel):
         mean_d_loss = 0
         return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
 
-    def __train_epoch_from_loader(self, data_loader, device, n_critic=5):
+    def __train_epoch_from_loader(self, data_loader, device, global_epoch=0):
         """Train epoch iterating DataLoader directly (no batch preloading)."""
         self.encoder.train()
         self.decoder.train()
-        lambda_l1 = self.lambda_l1
         lambda_pearson = self.lambda_pearson
-        train_loss = []
-        train_pearson_loss = []
+        is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
+                            global_epoch % self.spectral_every_k_epochs == 0)
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
+                                  'subgroup', 'cold', 'hard_cold']}
+        n_batches = 0
 
         for i, (low_res, high_res, labels) in enumerate(data_loader):
-            low_res = low_res.to(device)
-            high_res = high_res.to(device)
+            low_res = low_res.to(device, non_blocking=True)
+            high_res = high_res.to(device, non_blocking=True)
 
-            # Apply augmentation — DataLoader's collate_fn (torch.stack) already
-            # allocates new tensors, so we don't need .clone() here.
             if self.augment:
                 low_res, high_res = augment_batch(low_res, high_res,
                                                    slope_dir_channel=self.slope_direction_channel)
@@ -486,56 +554,84 @@ class UNET(BaseModel):
             pearson_loss = 1 - torch.mean(pearson_corr)
 
             combined_loss = mse_loss + lambda_pearson * pearson_loss
-            combined_loss.backward()
-            torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()), max_norm=1.0)      
-            self.optim.step()
-            train_loss.append(mse_loss.item())
-            train_pearson_loss.append(pearson_loss.item())
 
-        mean_loss = np.mean(train_loss)
-        mean_pearson_loss = np.mean(train_pearson_loss)
-        mean_bias_loss = 0
-        mean_d_loss = 0
-        return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss), float(mean_d_loss)
+            # Cold pixel loss
+            if self.lambda_cold > 0:
+                era5_map = self._extract_era5_map(inputs=low_res)
+                l_cold = self.lambda_cold * self._soft_cold_pixel_rate(decoded_data, era5_map)
+                combined_loss = combined_loss + l_cold
+                acc['cold'] += l_cold.item()
+
+            # Subgroup robustness loss
+            if self.lambda_subgroup > 0:
+                era5_map = self._extract_era5_map(inputs=low_res)
+                l_sub, _ = compute_subgroup_robustness_loss(decoded_data, high_res, era5_map)
+                combined_loss = combined_loss + self.lambda_subgroup * l_sub
+                acc['subgroup'] += l_sub.item()
+
+            # Spectral loss (K-th epochs only)
+            if self.lambda_spectral > 0 and is_pattern_epoch:
+                l_spec = self.lambda_spectral * compute_spectral_loss(decoded_data, high_res)
+                combined_loss = combined_loss + l_spec
+                acc['spectral'] += l_spec.item()
+
+            combined_loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()), max_norm=1.0)
+            self.optim.step()
+
+            acc['mse'] += mse_loss.item()
+            acc['pearson'] += pearson_loss.item()
+            with torch.no_grad():
+                acc['mae'] += (decoded_data - high_res).abs().mean().item()
+                if self.lambda_cold > 0 or self.lambda_subgroup > 0:
+                    acc['hard_cold'] += self._hard_cold_pct(decoded_data, era5_map)
+            n_batches += 1
+
+        return {k: v / max(n_batches, 1) for k, v in acc.items()}
 
     def __test_epoch_from_loader(self, data_loader, device, save_arr=None):
         """Test epoch iterating DataLoader directly (no batch preloading)."""
-        test_loss = []
-        test_pearson_loss = []
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'hard_cold', 'spectral']}
+        n_batches = 0
         self.encoder.eval()
         self.decoder.eval()
         with torch.no_grad():
             ctr = 0
             for (low_res, high_res, labels) in data_loader:
-                low_res = low_res.to(device)
-                high_res = high_res.to(device)
+                low_res = low_res.to(device, non_blocking=True)
+                high_res = high_res.to(device, non_blocking=True)
                 encoded_data, skip = self.encoder(low_res)
                 decoded_data = self.decoder(encoded_data, skip)
+
+                acc['mse'] += self.loss_fn(decoded_data, high_res).item()
+                acc['mae'] += (decoded_data - high_res).abs().mean().item()
                 pearson_corr = self.pearson_corr_torch(decoded_data, high_res)
-                pearson_loss = 1 - torch.mean(pearson_corr)
-                test_pearson_loss.append(pearson_loss.detach().cpu().numpy())
+                acc['pearson'] += (1 - torch.mean(pearson_corr)).item()
+                era5_map = self._extract_era5_map(inputs=low_res)
+                acc['hard_cold'] += self._hard_cold_pct(decoded_data, era5_map)
+                acc['spectral'] += compute_spectral_loss(decoded_data, high_res).item()
 
-                loss = self.loss_fn(decoded_data, high_res)
-                test_loss.append(loss.detach().cpu().numpy())
                 if save_arr is not None:
-                    save_arr[ctr:ctr + self.batch_size, :, :, :] = decoded_data.cpu()
-                ctr += self.batch_size
+                    B = decoded_data.shape[0]
+                    save_arr[ctr:ctr + B, :, :, :] = decoded_data.cpu()
+                ctr += decoded_data.shape[0]
+                n_batches += 1
 
-        mean_loss = np.mean(test_loss)
-        mean_pearson_loss = np.mean(test_pearson_loss)
-        mean_bias_loss = 0
-        return float(mean_loss), float(mean_pearson_loss), float(mean_bias_loss)
+        return {k: v / max(n_batches, 1) for k, v in acc.items()}
 
-    def __train_epoch_flow_matching(self, data_loader, device):
+    def __train_epoch_flow_matching(self, data_loader, device, global_epoch=0):
         """Train epoch for flow matching: predict velocity field."""
         self.flow_model.train()
-        train_loss = []
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
+                                  'subgroup', 'cold', 'hard_cold']}
+        n_batches = 0
+        is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
+                            global_epoch % self.spectral_every_k_epochs == 0)
 
         for i, (conditioning, target, labels) in enumerate(data_loader):
-            conditioning = conditioning.to(device)  # (B, 12, H, W)
-            target = target.to(device)              # (B, 1, H, W)
+            conditioning = conditioning.to(device, non_blocking=True)
+            target = target.to(device, non_blocking=True)
 
-            # Apply augmentation (H-flip, V-flip with slope_direction correction)
             if self.augment:
                 conditioning, target = augment_batch(conditioning, target,
                                                       slope_dir_channel=self.slope_direction_channel)
@@ -545,22 +641,22 @@ class UNET(BaseModel):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.flow_model.parameters(), max_norm=1.0)
             self.optim.step()
-            train_loss.append(loss.item())
+            acc['mse'] += loss.item()
+            n_batches += 1
 
-        return float(np.mean(train_loss)), 0.0, 0.0, 0.0
+        return {k: v / max(n_batches, 1) for k, v in acc.items()}
 
     def __test_epoch_flow_matching(self, data_loader, device, save_arr=None):
         """Test epoch for flow matching: run Euler integration and compute metrics on output."""
         self.flow_model.eval()
-        test_loss = []
-        test_pearson_loss = []
-        test_velocity_loss = []
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'velocity_mse', 'hard_cold', 'spectral']}
+        n_batches = 0
 
         with torch.no_grad():
             ctr = 0
             for (conditioning, target, labels) in data_loader:
-                conditioning = conditioning.to(device)
-                target = target.to(device)
+                conditioning = conditioning.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
                 B = conditioning.shape[0]
 
                 # Compute velocity MSE (same way as training for comparison)
@@ -570,7 +666,7 @@ class UNET(BaseModel):
                 x_t = (1.0 - t_expand) * noise + t_expand * target
                 velocity_target = target - noise
                 velocity_pred = self.flow_model(x_t, conditioning, t)
-                test_velocity_loss.append(F.mse_loss(velocity_pred, velocity_target).item())
+                acc['velocity_mse'] += F.mse_loss(velocity_pred, velocity_target).item()
                 
                 # Run inference: Euler integration from noise to prediction
                 target_shape = (B, target.shape[1], target.shape[2], target.shape[3])
@@ -579,23 +675,112 @@ class UNET(BaseModel):
                     num_steps=self.flow_steps, device=device
                 )
 
-                # MSE on final output (not velocity)
-                loss = self.loss_fn(predicted, target)
-                test_loss.append(loss.item())
-
-                # Pearson correlation on final output
+                acc['mse'] += self.loss_fn(predicted, target).item()
+                acc['mae'] += (predicted - target).abs().mean().item()
                 pearson_corr = self.pearson_corr_torch(predicted, target)
-                pearson_loss = 1 - torch.mean(pearson_corr)
-                test_pearson_loss.append(pearson_loss.item())
+                acc['pearson'] += (1 - torch.mean(pearson_corr)).item()
+                era5_map = self._extract_era5_map(inputs=conditioning)
+                acc['hard_cold'] += self._hard_cold_pct(predicted, era5_map)
+                acc['spectral'] += compute_spectral_loss(predicted, target).item()
 
                 if save_arr is not None:
                     save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
                 ctr += B
+                n_batches += 1
 
-        mean_loss = np.mean(test_loss)
-        mean_pearson_loss = np.mean(test_pearson_loss)
-        mean_velocity_loss = np.mean(test_velocity_loss)
-        return float(mean_loss), float(mean_pearson_loss), float(mean_velocity_loss)
+        return {k: v / max(n_batches, 1) for k, v in acc.items()}
+
+    def __train_epoch_conditioned(self, data_loader, device, global_epoch=0):
+        """Train epoch for conditioned architecture (4-tuple batches)."""
+        self.encoder.train()
+        self.decoder.train()
+        lambda_pearson = self.lambda_pearson
+        is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
+                            global_epoch % self.spectral_every_k_epochs == 0)
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
+                                  'subgroup', 'cold', 'hard_cold']}
+        n_batches = 0
+
+        for batch in data_loader:
+            spatial_b, cond_b, targets_b, _ = unpack_batch(batch, device, True)
+
+            if self.augment:
+                spatial_b, targets_b = augment_batch(
+                    spatial_b, targets_b,
+                    slope_dir_channel=self.slope_direction_channel)
+
+            self.optim.zero_grad()
+            pred = forward_pass(self.encoder, self.decoder, spatial_b, cond_b)
+
+            mse_loss = self.loss_fn(pred, targets_b)
+            pearson_corr = self.pearson_corr_torch(pred, targets_b)
+            pearson_loss = 1 - torch.mean(pearson_corr)
+
+            combined_loss = mse_loss + lambda_pearson * pearson_loss
+
+            # Cold pixel loss
+            if self.lambda_cold > 0:
+                era5_map = self._extract_era5_map(cond=cond_b)
+                l_cold = self.lambda_cold * self._soft_cold_pixel_rate(pred, era5_map)
+                combined_loss = combined_loss + l_cold
+                acc['cold'] += l_cold.item()
+
+            # Subgroup robustness loss
+            if self.lambda_subgroup > 0:
+                era5_map = self._extract_era5_map(cond=cond_b)
+                l_sub, _ = compute_subgroup_robustness_loss(pred, targets_b, era5_map)
+                combined_loss = combined_loss + self.lambda_subgroup * l_sub
+                acc['subgroup'] += l_sub.item()
+
+            # Spectral loss (K-th epochs only)
+            if self.lambda_spectral > 0 and is_pattern_epoch:
+                l_spec = self.lambda_spectral * compute_spectral_loss(pred, targets_b)
+                combined_loss = combined_loss + l_spec
+                acc['spectral'] += l_spec.item()
+
+            combined_loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                list(self.encoder.parameters()) + list(self.decoder.parameters()),
+                max_norm=1.0)
+            self.optim.step()
+
+            acc['mse'] += mse_loss.item()
+            acc['pearson'] += pearson_loss.item()
+            with torch.no_grad():
+                acc['mae'] += (pred - targets_b).abs().mean().item()
+                if self.lambda_cold > 0 or self.lambda_subgroup > 0:
+                    acc['hard_cold'] += self._hard_cold_pct(pred, era5_map)
+            n_batches += 1
+
+        return {k: v / max(n_batches, 1) for k, v in acc.items()}
+
+    def __test_epoch_conditioned(self, data_loader, device, save_arr=None):
+        """Test epoch for conditioned architecture (4-tuple batches)."""
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'hard_cold', 'spectral']}
+        n_batches = 0
+        self.encoder.eval()
+        self.decoder.eval()
+        with torch.no_grad():
+            ctr = 0
+            for batch in data_loader:
+                spatial_b, cond_b, targets_b, _ = unpack_batch(batch, device, True)
+                pred = forward_pass(self.encoder, self.decoder, spatial_b, cond_b)
+
+                acc['mse'] += self.loss_fn(pred, targets_b).item()
+                acc['mae'] += (pred - targets_b).abs().mean().item()
+                pearson_corr = self.pearson_corr_torch(pred, targets_b)
+                acc['pearson'] += (1 - torch.mean(pearson_corr)).item()
+                era5_map = self._extract_era5_map(cond=cond_b)
+                acc['hard_cold'] += self._hard_cold_pct(pred, era5_map)
+                acc['spectral'] += compute_spectral_loss(pred, targets_b).item()
+
+                if save_arr is not None:
+                    B = pred.shape[0]
+                    save_arr[ctr:ctr + B, :, :, :] = pred.cpu()
+                ctr += pred.shape[0]
+                n_batches += 1
+
+        return {k: v / max(n_batches, 1) for k, v in acc.items()}
 
     def __test_epoch(self, batches, device, save_arr=None):
         test_loss = []
@@ -645,6 +830,21 @@ class UNET(BaseModel):
                         self.flow_model, conditioning, target_shape,
                         num_steps=self.flow_steps, device=device
                     )
+                    save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
+                    ctr += B
+        elif self.architecture == 'conditioned':
+            self.encoder.eval()
+            self.decoder.eval()
+            device = next(self.encoder.parameters()).device
+            # cond channels are the last self.cond_dim channels
+            spatial_ch = self.input_shape[0] - self.cond_dim
+            cond_indices = list(range(spatial_ch, self.input_shape[0]))
+            with torch.no_grad():
+                ctr = 0
+                for input_data in batches:
+                    spatial_b, cond_b = split_for_scoring(input_data, cond_indices)
+                    predicted = forward_pass(self.encoder, self.decoder, spatial_b, cond_b)
+                    B = predicted.shape[0]
                     save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
                     ctr += B
         else:
@@ -716,8 +916,12 @@ class UNET(BaseModel):
         train_ds.transform = train_transform
         test_ds.transform = test_transform
 
-        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(
+            train_ds, batch_size=self.batch_size, shuffle=True,
+            num_workers=4, pin_memory=True, persistent_workers=True)
+        test_loader = torch.utils.data.DataLoader(
+            test_ds, batch_size=self.batch_size, shuffle=True,
+            num_workers=2, pin_memory=True, persistent_workers=True)
 
         if self.use_gpu:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -869,6 +1073,24 @@ class UNET(BaseModel):
                 )
                 print(f"Flow Matching UNet: {sum(p.numel() for p in self.flow_model.parameters()):,} parameters")
                 print(f"Inference steps: {self.flow_steps}")
+        elif self.architecture == 'conditioned':
+            # get_input_shape() returns spatial channels only for conditioned datasets.
+            # Store total (spatial + cond) as input_shape so apply_cae and load() work.
+            spatial_ch = input_chan  # from get_input_shape() = spatial only
+            self.input_shape = (spatial_ch + self.cond_dim, input_y, input_x)
+            if not self.encoder:
+                self.encoder = ConditionedEncoder(
+                    spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
+                    base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+            if not self.decoder:
+                self.decoder = ConditionedDecoder(
+                    out_channels=output_chan, cond_dim=self.cond_dim,
+                    base_channels=self.base_channels, dropout_rate=self.dropout_rate,
+                    output_activation=self.output_activation)
+            n_enc = sum(p.numel() for p in self.encoder.parameters())
+            n_dec = sum(p.numel() for p in self.decoder.parameters())
+            print(f"Conditioned UNet: spatial_ch={spatial_ch}, cond_dim={self.cond_dim}")
+            print(f"  Encoder: {n_enc:,}, Decoder: {n_dec:,}, Total: {n_enc+n_dec:,}")
         else:
             if not self.encoder:
                 if self.architecture == 'standard':
@@ -881,8 +1103,12 @@ class UNET(BaseModel):
                 else:
                     self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 
-        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
+        train_loader = torch.utils.data.DataLoader(
+            train_ds, batch_size=self.batch_size, shuffle=True,
+            num_workers=4, pin_memory=True, persistent_workers=True)
+        test_loader = torch.utils.data.DataLoader(
+            test_ds, batch_size=self.batch_size, shuffle=True,
+            num_workers=2, pin_memory=True, persistent_workers=True)
 
         if self.use_gpu:
             device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
@@ -893,7 +1119,21 @@ class UNET(BaseModel):
 
         start = time.time()
 
+        # Save training command for reproducibility
+        if model_path:
+            os.makedirs(model_path, exist_ok=True)
+            cmd_path = os.path.join(model_path, 'training_command.txt')
+            with open(cmd_path, 'w') as f:
+                f.write(' '.join(sys.argv))
+
         self.loss_fn = torch.nn.MSELoss()
+
+        if self.lambda_spectral > 0 or self.lambda_subgroup > 0 or self.lambda_cold > 0:
+            print(f'Aux losses: lambda_spectral={self.lambda_spectral}, '
+                  f'spectral_every_k={self.spectral_every_k_epochs}, '
+                  f'lambda_subgroup={self.lambda_subgroup}, '
+                  f'lambda_cold={self.lambda_cold}, '
+                  f'cold_threshold_k={self.cold_threshold_k}')
 
         if self.architecture == 'flow_matching':
             self.flow_model.to(device)
@@ -942,115 +1182,165 @@ class UNET(BaseModel):
             self._sigterm_received = True
         signal.signal(signal.SIGTERM, _handle_sigterm)
 
-        # ---- Best-checkpoint tracking (persists across job boundaries via history) ----
-        # We track two "optimal" points:
-        #
-        # 1. checkpoint_best_test_mse/
-        #    Saved when EMA-smoothed test MSE hits a new minimum.
-        #    Best absolute generalisation — use this for inference.
-        #
-        # 2. checkpoint_best_ratio/
-        #    Saved when train/test ratio hits a new minimum.
-        #    Diagnostic: where the model was least overfit relative to training loss.
-        #
-        # EMA smoothing (alpha=0.3) removes single-epoch noise spikes without
-        # masking real trends. State is stored in history so it survives job boundaries.
-        #
-        # Both checkpoints are saved via self.save() so --continue-training works
-        # identically from them as from any other checkpoint.
+        # ---- Best-checkpoint tracking ----
         EMA_ALPHA = 0.3
         _ema_test = self.history.get('_ema_test_mse', None)
         _best_ema_test = self.history.get('_best_ema_test_mse', float('inf'))
+        _best_test_mse = self.history.get('_best_test_mse', float('inf'))
         _ema_ratio = self.history.get('_ema_ratio', None)
         _best_ema_ratio = self.history.get('_best_train_test_ratio', float('inf'))
-        # Minimum epoch before ratio tracking starts. Before this point train loss
-        # >> test loss (ratio < 1) which is meaningless, and the EMA needs a few
-        # steps to warm up anyway.
         RATIO_WARMUP_EPOCHS = 50
 
         try:
             for epoch in range(epochs_this_job):
-                global_epoch = epochs_already_done + epoch  # epoch number in the full training run
+                epoch_start = time.time()
+                global_epoch = epochs_already_done + epoch
+
+                # ---- Train epoch ----
                 if self.architecture == 'flow_matching':
-                    train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_flow_matching(train_loader, device)
+                    train_m = self.__train_epoch_flow_matching(train_loader, device, global_epoch)
+                elif self.architecture == 'conditioned':
+                    train_m = self.__train_epoch_conditioned(train_loader, device, global_epoch)
                 else:
-                    train_loss, train_pearson_loss, train_bias_loss, train_d_loss = self.__train_epoch_from_loader(train_loader, device)
+                    train_m = self.__train_epoch_from_loader(train_loader, device, global_epoch)
+                train_loss = train_m['mse']
+
                 if global_epoch < T_max:
                     scheduler.step()
+
+                # ---- Test epoch + logging ----
                 if epoch % self.test_interval == 0:
                     if self.architecture == 'flow_matching':
-                        test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_flow_matching(test_loader, device)
+                        test_m = self.__test_epoch_flow_matching(test_loader, device)
+                    elif self.architecture == 'conditioned':
+                        test_m = self.__test_epoch_conditioned(test_loader, device)
                     else:
-                        test_loss, test_pearson_loss, test_bias_loss = self.__test_epoch_from_loader(test_loader, device)
-                    lr = self.get_lr(self.optim)
-                    self.history["train_loss"].append(train_loss)
-                    self.history["test_loss"].append(test_loss)
+                        test_m = self.__test_epoch_from_loader(test_loader, device)
 
-                    # Update EMA of test loss
+                    test_loss = test_m['mse']
+                    test_mae = test_m.get('mae', 0.0)
+                    test_pearson = test_m.get('pearson', 0.0)
+                    train_mae = train_m.get('mae', 0.0)
+                    hard_cold_test = test_m.get('hard_cold', 0.0)
+                    hard_cold_train = train_m.get('hard_cold', 0.0)
+                    lr = self.get_lr(self.optim)
+
+                    # EMA tracking
                     if _ema_test is None:
                         _ema_test = test_loss
                     else:
                         _ema_test = EMA_ALPHA * test_loss + (1 - EMA_ALPHA) * _ema_test
-
                     ratio = test_loss / train_loss if train_loss > 0 else float('inf')
-
-                    # EMA of ratio (same alpha as test MSE)
                     if _ema_ratio is None:
                         _ema_ratio = ratio
                     else:
                         _ema_ratio = EMA_ALPHA * ratio + (1 - EMA_ALPHA) * _ema_ratio
 
-                    if self.architecture == 'flow_matching':
-                        print(f"epoch: {global_epoch}, train_velocity_mse: {train_loss:.6f}, test_velocity_mse: {test_bias_loss:.6f}, test_output_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}, ema_test: {_ema_test:.6f}, ema_ratio: {_ema_ratio:.3f}")
+                    # ---- Logging ----
+                    is_fm = (self.architecture == 'flow_matching')
+                    p_label = "l_cfm" if is_fm else "l_mse"
+                    print(f"\nepoch: {global_epoch}")
+                    print(f"  {p_label}:      train={train_loss:.6f}  test={test_loss:.6f}  "
+                          f"ema_test={_ema_test:.6f}  ema_ratio={_ema_ratio:.3f}")
+                    if not is_fm:
+                        print(f"  metrics:    train_rmse={train_loss**0.5:.6f}  "
+                              f"test_rmse={test_loss**0.5:.6f}  "
+                              f"train_mae={train_mae:.6f}  test_mae={test_mae:.6f}  "
+                              f"rmse/mae={test_loss**0.5/max(test_mae,1e-10):.3f}")
+                        try:
+                            out_range = self._get_output_range_k()
+                            print(f"  physical:   train_rmse={train_loss**0.5*out_range:.2f}K  "
+                                  f"test_rmse={test_loss**0.5*out_range:.2f}K  "
+                                  f"train_mae={train_mae*out_range:.2f}K  "
+                                  f"test_mae={test_mae*out_range:.2f}K")
+                        except Exception:
+                            pass  # normalisation_parameters may not support K conversion
+                        print(f"  pearson:    train={train_m.get('pearson',0):.4f}  "
+                              f"test={test_pearson:.4f}")
                     else:
-                        print(f"epoch: {global_epoch}, train_mse: {train_loss:.6f}, train_pearson_loss: {train_pearson_loss:.4f}, test_mse: {test_loss:.6f}, test_pearson_loss: {test_pearson_loss:.4f}, ema_test: {_ema_test:.6f}, ema_ratio: {_ema_ratio:.3f}")
-                    print(f"learn rate: {lr:.6f}")
+                        vel_mse = test_m.get('velocity_mse', 0.0)
+                        print(f"  velocity:   test_vel_mse={vel_mse:.6f}")
+                        print(f"  metrics:    test_rmse={test_loss**0.5:.6f}  "
+                              f"test_mae={test_mae:.6f}  "
+                              f"rmse/mae={test_loss**0.5/max(test_mae,1e-10):.3f}")
+                        try:
+                            out_range = self._get_output_range_k()
+                            print(f"  physical:   test_rmse={test_loss**0.5*out_range:.2f}K  "
+                                  f"test_mae={test_mae*out_range:.2f}K")
+                        except Exception:
+                            pass
+                    if hard_cold_test > 0 or hard_cold_train > 0:
+                        print(f"  cold%:      train={hard_cold_train:.4f}%  "
+                              f"test={hard_cold_test:.4f}%")
+                    print(f"  spectral:   train={train_m.get('spectral',0):.6f}  "
+                          f"test={test_m.get('spectral',0):.6f}")
+                    if train_m.get('subgroup', 0) > 0 or train_m.get('cold', 0) > 0:
+                        print(f"  aux:        subgroup={train_m.get('subgroup',0):.6f}  "
+                              f"cold={train_m.get('cold',0):.6f}")
+                    print(f"  lr:         {lr:.2e}")
 
-                    # Persist EMA state and bests in history for job-boundary survival
-                    self.history['_ema_test_mse'] = _ema_test
-                    self.history['_ema_ratio'] = _ema_ratio
+                    # ---- History ----
+                    h = self.history
+                    h.setdefault('train_loss', []).append(float(train_loss))
+                    h.setdefault('test_loss', []).append(float(test_loss))
+                    h.setdefault('test_pearson_loss', []).append(float(test_pearson))
+                    h.setdefault('test_mae', []).append(float(test_mae))
+                    h.setdefault('train_mae', []).append(float(train_mae))
+                    h.setdefault('hard_cold_test_pct', []).append(float(hard_cold_test))
+                    h.setdefault('hard_cold_train_pct', []).append(float(hard_cold_train))
+                    h.setdefault('train_spectral', []).append(float(train_m.get('spectral', 0)))
+                    h.setdefault('test_spectral', []).append(float(test_m.get('spectral', 0)))                    
+                    h['_ema_test_mse'] = float(_ema_test)
+                    h['_ema_ratio'] = float(_ema_ratio)
 
-                    # ---- Checkpoint: best absolute test performance ----
+                    # ---- Checkpoint: best raw test MSE (primary) ----
+                    if model_path and test_loss < _best_test_mse:
+                        _best_test_mse = test_loss
+                        h['_best_test_mse'] = float(_best_test_mse)
+                        h['_best_test_mse_epoch'] = global_epoch
+                        h['nr_epochs'] = global_epoch + 1
+                        best_path = os.path.join(model_path, "checkpoint_best_test_mse")
+                        print(f"  ★ New best test MSE {test_loss:.6f} at epoch {global_epoch} → {best_path}")
+                        self.save(best_path)
+
+                    # ---- Checkpoint: best EMA test MSE (smoothed) ----
                     if model_path and _ema_test < _best_ema_test:
                         _best_ema_test = _ema_test
-                        self.history['_best_ema_test_mse'] = _best_ema_test
-                        self.history['_best_ema_test_epoch'] = global_epoch
-                        self.history['nr_epochs'] = global_epoch + 1
-                        best_test_path = os.path.join(model_path, "checkpoint_best_test_mse")
-                        print(f"  ★ New best smoothed test MSE {_ema_test:.6f} at epoch {global_epoch} → saving {best_test_path}")
-                        self.save(best_test_path)
+                        h['_best_ema_test_mse'] = float(_best_ema_test)
+                        h['_best_ema_test_epoch'] = global_epoch
 
-                    # ---- Checkpoint: best train/test ratio (least overfit) ----
-                    # Guards: epoch > warmup (EMA needs time to stabilise, early epochs
-                    # have train >> test so ratio < 1 which is meaningless) AND
-                    # ema_ratio > 1.0 (model must actually be overfitting for ratio to matter).
+                    # ---- Checkpoint: best ratio ----
                     ratio_ready = global_epoch >= RATIO_WARMUP_EPOCHS and _ema_ratio > 1.0
                     if model_path and ratio_ready and _ema_ratio < _best_ema_ratio:
                         _best_ema_ratio = _ema_ratio
-                        self.history['_best_train_test_ratio'] = _best_ema_ratio
-                        self.history['_best_ratio_epoch'] = global_epoch
-                        self.history['nr_epochs'] = global_epoch + 1
+                        h['_best_train_test_ratio'] = float(_best_ema_ratio)
+                        h['_best_ratio_epoch'] = global_epoch
+                        h['nr_epochs'] = global_epoch + 1
                         best_ratio_path = os.path.join(model_path, "checkpoint_best_ratio")
-                        print(f"  ★ New best EMA ratio {_ema_ratio:.3f} at epoch {global_epoch} → saving {best_ratio_path}")
+                        print(f"  ★ New best EMA ratio {_ema_ratio:.3f} at epoch {global_epoch} → {best_ratio_path}")
                         self.save(best_ratio_path)
 
-                # Save checkpoint every N epochs
+                # Periodic checkpoint
                 if self.checkpoint_interval and model_path and (global_epoch + 1) % self.checkpoint_interval == 0:
                     self.history['nr_epochs'] = global_epoch + 1
                     checkpoint_path = os.path.join(model_path, f"checkpoint_epoch_{global_epoch + 1}")
                     print(f"Saving checkpoint to {checkpoint_path}...")
                     self.save(checkpoint_path)
 
-                # SIGTERM received: save and exit cleanly so SLURM can resubmit
+                # SIGTERM
                 if self._sigterm_received:
-                    print(f"[SIGTERM] Saving emergency checkpoint at global epoch {global_epoch + 1}...")
+                    print(f"[SIGTERM] Saving at global epoch {global_epoch + 1}...")
                     self.history['nr_epochs'] = global_epoch + 1
                     if model_path:
                         emergency_path = os.path.join(model_path, f"checkpoint_epoch_{global_epoch + 1}_sigterm")
                         self.save(emergency_path)
-                        # Also overwrite the main model folder so --model-folder continues from here
                         self.save(model_path)
                     break
+
+                # Epoch timing
+                epoch_sec = time.time() - epoch_start
+                if epoch % self.test_interval == 0:
+                    print(f"  time:       {epoch_sec:.1f}s  ({3600/max(epoch_sec,0.1):.1f} epochs/hr)")
 
         except KeyboardInterrupt:
             print("Training interrupted. Performing cleanup...")
@@ -1063,11 +1353,10 @@ class UNET(BaseModel):
             end = time.time()
             elapsed = end - start
 
-        # Update nr_epochs to reflect true total trained (SIGTERM path already set it)
         if not self._sigterm_received:
             self.history['nr_epochs'] = epochs_already_done + epochs_this_job
 
-        print("elapsed:" + str(elapsed))
+        print(f"Elapsed: {elapsed:.1f}s")
 
         # Get input/output variable names from dataset
         input_variables = [spec['name'] for spec in train_ds.get_input_spec()]
@@ -1103,6 +1392,19 @@ class UNET(BaseModel):
             s += f"\tTotal parameters: {n_params:,}\n"
             s += f"\tInput shape: {self.input_shape}\n"
             s += f"\tOutput shape: {self.output_shape}\n"
+            return s
+        elif self.architecture == 'conditioned' and self.encoder is not None:
+            n_enc = sum(p.numel() for p in self.encoder.parameters())
+            n_dec = sum(p.numel() for p in self.decoder.parameters())
+            spatial_ch = self.input_shape[0] - self.cond_dim
+            s = f"Conditioned UNet Summary:\n"
+            s += f"\tArchitecture: conditioned\n"
+            s += f"\tBase channels: {self.base_channels}\n"
+            s += f"\tSpatial channels: {spatial_ch}\n"
+            s += f"\tConditioning dim: {self.cond_dim}\n"
+            s += f"\tEncoder parameters: {n_enc:,}\n"
+            s += f"\tDecoder parameters: {n_dec:,}\n"
+            s += f"\tTotal parameters: {n_enc + n_dec:,}\n"
             return s
         elif self.architecture == 'standard' and self.encoder is not None:
             n_enc = sum(p.numel() for p in self.encoder.parameters())
@@ -1224,6 +1526,14 @@ class UNET(BaseModel):
             self.augment = parameters.get("augment", False)
             self.slope_direction_channel = parameters.get("slope_direction_channel", 7)
             self.lambda_pearson = parameters.get("lambda_pearson", 0)
+            self.cond_dim = parameters.get("cond_dim", 0)
+            self.lambda_spectral = parameters.get("lambda_spectral", 0.0)
+            self.spectral_every_k_epochs = parameters.get("spectral_every_k_epochs", 10)
+            self.lambda_subgroup = parameters.get("lambda_subgroup", 0.0)
+            self.lambda_cold = parameters.get("lambda_cold", 0.0)
+            self.cold_threshold_k = parameters.get("cold_threshold_k", 10.0)
+            self.era5_channel_idx = parameters.get("era5_channel_idx", 3)
+            self.era5_cond_idx = parameters.get("era5_cond_idx", 0)
             
         use_fc = (self.bottleneck_type == 'fc')
 
@@ -1250,6 +1560,17 @@ class UNET(BaseModel):
             flow_model_path = os.path.join(from_folder, "flow_model.weights")
             self.flow_model.load_state_dict(self.torch_load(flow_model_path))
             self.flow_model.eval()
+        elif self.architecture == 'conditioned':
+            input_chan = self.input_shape[0]
+            output_chan = self.output_shape[0]
+            spatial_ch = input_chan - self.cond_dim
+            self.encoder = ConditionedEncoder(
+                spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
+                base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+            self.decoder = ConditionedDecoder(
+                out_channels=output_chan, cond_dim=self.cond_dim,
+                base_channels=self.base_channels, dropout_rate=self.dropout_rate,
+                output_activation=self.output_activation)
         elif self.architecture == 'standard':
             input_chan = self.input_shape[0]
             output_chan = self.output_shape[0]
@@ -1286,6 +1607,94 @@ class UNET(BaseModel):
             self._saved_scheduler_state_path = None
 
         super().load(from_folder)
+
+
+    def _get_output_range_k(self):
+        """Return (max_output - min_output) in Kelvin for denormalisation."""
+        norm_params = self.normalisation_parameters
+        if isinstance(norm_params, list):
+            # List-format normalisation: [min_inputs, max_inputs, min_outputs, max_outputs]
+            min_out = norm_params[2].get('ST_slices', list(norm_params[2].values())[0])
+            max_out = norm_params[3].get('ST_slices', list(norm_params[3].values())[0])
+        else:
+            min_out = norm_params['min_output']
+            max_out = norm_params['max_output']
+        return max_out - min_out
+
+    def _get_era5_norm_range(self):
+        """Return (min, max) of ERA5 normalised range for cold pixel calc."""
+        norm_params = self.normalisation_parameters
+        if isinstance(norm_params, list):
+            era5_key = 'era5_skt'
+            min_in = norm_params[0].get(era5_key, 0.0)
+            max_in = norm_params[1].get(era5_key, 1.0)
+        else:
+            min_in = 0.0
+            max_in = 1.0
+        return min_in, max_in
+
+    def _soft_cold_pixel_rate(self, pred, era5_map):
+        """
+        Soft cold pixel rate: fraction of pixels predicted colder than
+        ERA5 - cold_threshold_k (in Kelvin), using a smooth sigmoid.
+
+        Args:
+            pred: (B, 1, H, W) normalised prediction
+            era5_map: (B, 1, H, W) normalised ERA5 skin temperature
+        """
+        norm_params = self.normalisation_parameters
+        if isinstance(norm_params, list):
+            min_out = norm_params[2].get('ST_slices', list(norm_params[2].values())[0])
+            max_out = norm_params[3].get('ST_slices', list(norm_params[3].values())[0])
+            era5_min, era5_max = self._get_era5_norm_range()
+        else:
+            min_out = norm_params.get('min_output', 0.0)
+            max_out = norm_params.get('max_output', 1.0)
+            era5_min, era5_max = 0.0, 1.0
+        pred_k = pred * (max_out - min_out) + min_out
+        era5_k = era5_map * (era5_max - era5_min) + era5_min
+        threshold_k = era5_k - self.cold_threshold_k
+        soft_cold = torch.sigmoid(2.0 * (threshold_k - pred_k))
+        return soft_cold.mean()
+
+    def _hard_cold_pct(self, pred, era5_map):
+        """
+        Hard cold pixel percentage: fraction of pixels predicted colder than
+        ERA5 - cold_threshold_k (in Kelvin).
+
+        Args:
+            pred: (B, 1, H, W) normalised prediction
+            era5_map: (B, 1, H, W) normalised ERA5 skin temperature
+        """
+        norm_params = self.normalisation_parameters
+        if isinstance(norm_params, list):
+            min_out = norm_params[2].get('ST_slices', list(norm_params[2].values())[0])
+            max_out = norm_params[3].get('ST_slices', list(norm_params[3].values())[0])
+            era5_min, era5_max = self._get_era5_norm_range()
+        else:
+            min_out = norm_params.get('min_output', 0.0)
+            max_out = norm_params.get('max_output', 1.0)
+            era5_min, era5_max = 0.0, 1.0
+        pred_k = pred * (max_out - min_out) + min_out
+        era5_k = era5_map * (era5_max - era5_min) + era5_min
+        threshold_k = era5_k - self.cold_threshold_k
+        cold_mask = pred_k < threshold_k
+        return 100.0 * cold_mask.float().mean().item()
+
+    def _extract_era5_map(self, inputs=None, cond=None):
+        """
+        Extract ERA5 skin temperature as (B, 1, H, W) from inputs or cond.
+
+        For standard/legacy/flow_matching: era5 is spatial channel era5_channel_idx.
+        For conditioned: era5 is conditioning scalar era5_cond_idx, broadcast to spatial.
+        """
+        if self.architecture == 'conditioned' and cond is not None:
+            B = cond.shape[0]
+            era5_scalar = cond[:, self.era5_cond_idx:self.era5_cond_idx + 1]  # (B, 1)
+            H, W = self.output_shape[1], self.output_shape[2]
+            return era5_scalar.unsqueeze(-1).unsqueeze(-1).expand(B, 1, H, W)
+        else:
+            return inputs[:, self.era5_channel_idx:self.era5_channel_idx + 1, :, :]
 
     def pearson_corr_torch(self, decoded_data, high_res):
         # flatten

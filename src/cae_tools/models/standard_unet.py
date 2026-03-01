@@ -38,11 +38,11 @@ class ResidualBlock(nn.Module):
             num_groups = self._select_num_groups(min(in_channels, out_channels))
         
         self.gn1 = nn.GroupNorm(self._select_num_groups(in_channels), in_channels)
-        self.relu1 = nn.ReLU(inplace=True)
+        self.relu1 = nn.SiLU(inplace=True)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
         
         self.gn2 = nn.GroupNorm(self._select_num_groups(out_channels), out_channels)
-        self.relu2 = nn.ReLU(inplace=True)
+        self.relu2 = nn.SiLU(inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
         
         self.dropout = nn.Dropout2d(dropout_rate) if dropout_rate > 0 else nn.Identity()

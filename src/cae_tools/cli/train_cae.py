@@ -24,6 +24,7 @@ from cae_tools.models.unet import UNET
 from cae_tools.models.linear_model import LinearModel
 from cae_tools.models.model_sizer import ModelSpec
 from cae_tools.models.preprocessed_dataset import PreprocessedDataset
+from cae_tools.models.conditioned_preprocessed_dataset import ConditionedPreprocessedDataset
 
 
 def main():
@@ -74,8 +75,8 @@ def main():
                         help="model predicts delta (LST - ERA5); apply_cae adds ERA5 back for physical LST")
     parser.add_argument("--delta-reference-channel", type=str, default=None,
                         help="input variable name used as reference for delta prediction (e.g. era5_skt)")
-    parser.add_argument("--architecture", type=str, choices=["legacy", "standard", "flow_matching"], default="legacy",
-                        help="UNet architecture: 'legacy' (original), 'standard' (residual blocks, GroupNorm, bilinear upsample), 'flow_matching' (conditional flow matching)")
+    parser.add_argument("--architecture", type=str, choices=["legacy", "standard", "flow_matching", "conditioned"], default="legacy",
+                        help="UNet architecture: 'legacy' (original), 'standard' (residual blocks, GroupNorm, bilinear upsample), 'flow_matching' (conditional flow matching), 'conditioned' (separate spatial/conditioning inputs)")
     parser.add_argument("--base-channels", type=int, default=64,
                         help="base channel count for standard/flow_matching architecture (default: 64, doubles each stage)")
     parser.add_argument("--flow-steps", type=int, default=4,
@@ -84,6 +85,20 @@ def main():
                         help="enable data augmentation (random H/V flips with slope_direction correction)")
     parser.add_argument("--slope-direction-channel", type=int, default=7,
                         help="index of slope_direction channel for augmentation correction (default: 7)")
+    parser.add_argument("--lambda-spectral", type=float, default=0.0,
+                        help="weight for spectral (FFT) loss (default: 0.0 = disabled)")
+    parser.add_argument("--spectral-every-k-epochs", type=int, default=10,
+                        help="compute spectral loss every K epochs (default: 10)")
+    parser.add_argument("--lambda-subgroup", type=float, default=0.0,
+                        help="weight for subgroup robustness loss (default: 0.0 = disabled)")
+    parser.add_argument("--lambda-cold", type=float, default=0.0,
+                        help="weight for cold pixel penalty loss (default: 0.0 = disabled)")
+    parser.add_argument("--cold-threshold-k", type=float, default=10.0,
+                        help="cold pixel threshold in Kelvin below ERA5 (default: 10.0)")
+    parser.add_argument("--era5-channel-idx", type=int, default=3,
+                        help="index of ERA5 skt channel in spatial inputs (default: 3)")
+    parser.add_argument("--era5-cond-idx", type=int, default=0,
+                        help="index of ERA5 skt in conditioning vector for conditioned arch (default: 0)")
 
     args = parser.parse_args()
 
@@ -93,8 +108,22 @@ def main():
             raise ValueError("Preprocessed mode requires exactly one .pt file for train and one for test")
         
         print("Loading preprocessed data...")
-        train_ds = PreprocessedDataset(args.train_inputs[0])
-        test_ds = PreprocessedDataset(args.test_inputs[0])
+
+        # Auto-detect conditioned format by checking .pt file contents
+        import torch as _torch
+        _probe = _torch.load(args.train_inputs[0], map_location='cpu', weights_only=False)
+        _is_conditioned = (_probe.get('format') == 'conditioned')
+        del _probe
+
+        if _is_conditioned or args.architecture == 'conditioned':
+            train_ds = ConditionedPreprocessedDataset(args.train_inputs[0])
+            test_ds = ConditionedPreprocessedDataset(args.test_inputs[0])
+            _cond_dim = train_ds.get_cond_dim()
+            print(f"Conditioned format: spatial_ch={train_ds.get_input_shape()[0]}, cond_dim={_cond_dim}")
+        else:
+            train_ds = PreprocessedDataset(args.train_inputs[0])
+            test_ds = PreprocessedDataset(args.test_inputs[0])
+            _cond_dim = 0
         
         # Use normalisation parameters from training data for test data
         test_ds.set_normalisation_parameters(train_ds.get_normalisation_parameters())
@@ -146,7 +175,15 @@ def main():
                           delta_reference_channel=args.delta_reference_channel,
                           architecture=args.architecture, base_channels=args.base_channels,
                           flow_steps=args.flow_steps,
-                          augment=args.augment, slope_direction_channel=args.slope_direction_channel)
+                          augment=args.augment, slope_direction_channel=args.slope_direction_channel,
+                          cond_dim=_cond_dim,
+                          lambda_spectral=args.lambda_spectral,
+                          spectral_every_k_epochs=args.spectral_every_k_epochs,
+                          lambda_subgroup=args.lambda_subgroup,
+                          lambda_cold=args.lambda_cold,
+                          cold_threshold_k=args.cold_threshold_k,
+                          era5_channel_idx=args.era5_channel_idx,
+                          era5_cond_idx=args.era5_cond_idx)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -255,7 +292,14 @@ def main():
                       delta_reference_channel=args.delta_reference_channel,
                       architecture=args.architecture, base_channels=args.base_channels,
                       flow_steps=args.flow_steps,
-                      augment=args.augment, slope_direction_channel=args.slope_direction_channel)
+                      augment=args.augment, slope_direction_channel=args.slope_direction_channel,
+                      lambda_spectral=args.lambda_spectral,
+                      spectral_every_k_epochs=args.spectral_every_k_epochs,
+                      lambda_subgroup=args.lambda_subgroup,
+                      lambda_cold=args.lambda_cold,
+                      cold_threshold_k=args.cold_threshold_k,
+                      era5_channel_idx=args.era5_channel_idx,
+                      era5_cond_idx=args.era5_cond_idx)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

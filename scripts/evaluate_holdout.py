@@ -52,6 +52,8 @@ sys.path.insert(0, '/home/users/shaerdan/cae_tools_pB/src')
 
 from cae_tools.models.unet import UNET
 from cae_tools.models.linear_model import LinearModel
+from cae_tools.models.flow_matching_unet import (
+    FlowMatchingUNet, flow_matching_sample)
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +63,7 @@ from cae_tools.models.linear_model import LinearModel
 def detect_model_type(model_folder):
     """Read parameters.json to determine model type.
 
-    Returns 'UNET' or 'LinearModel'.
+    Returns one of: 'UNET_standard', 'UNET_flow_matching', 'LinearModel'.
     """
     parameters_path = os.path.join(model_folder, 'parameters.json')
     if not os.path.exists(parameters_path):
@@ -73,41 +75,121 @@ def detect_model_type(model_folder):
         parameters = json.load(f)
 
     model_type = parameters.get('type', None)
-    if model_type is None:
-        # Fallback: if 'encoded_dim_size' exists, it's a UNET
-        if 'encoded_dim_size' in parameters:
-            model_type = 'UNET'
-        else:
-            model_type = 'LinearModel'
 
-    if model_type not in ('UNET', 'LinearModel'):
+    if model_type == 'UNET':
+        arch = parameters.get('architecture', 'standard')
+        if arch == 'flow_matching':
+            return 'UNET_flow_matching'
+        else:
+            return 'UNET_standard'
+    elif model_type == 'LinearModel':
+        return 'LinearModel'
+    elif model_type is None:
+        # Fallback heuristic
+        if 'encoded_dim_size' in parameters:
+            return 'UNET_standard'
+        else:
+            return 'LinearModel'
+    else:
         raise ValueError(
             f"Unknown model type '{model_type}' in {parameters_path}")
 
-    return model_type
-
 
 def load_model(model_folder, device):
-    """Load model from checkpoint folder. Auto-detects UNET vs LinearModel."""
+    """Load model from checkpoint folder. Auto-detects model type.
+
+    Returns:
+        (model, model_type) where model_type is one of:
+        'UNET_standard', 'UNET_flow_matching', 'LinearModel'.
+    """
     model_type = detect_model_type(model_folder)
     print(f"  Detected model type: {model_type}")
 
-    if model_type == 'UNET':
-        mt = UNET()
-        mt.load(model_folder)
-        if mt.encoder is not None:
-            mt.encoder.to(device)
-            mt.encoder.eval()
-        if mt.decoder is not None:
-            mt.decoder.to(device)
-            mt.decoder.eval()
-    else:
+    if model_type == 'LinearModel':
         mt = LinearModel()
         mt.load(model_folder)
         mt.weights.to(device)
         mt.weights.eval()
+        return mt, model_type
 
-    return mt
+    # --- UNET (both standard and flow_matching) ---
+    mt = UNET()
+    mt.load(model_folder)
+
+    if model_type == 'UNET_flow_matching':
+        # Flow matching uses mt.flow_model, not encoder/decoder
+        if mt.flow_model is None:
+            input_chan = mt.input_shape[0]
+            output_chan = mt.output_shape[0]
+            base_ch = getattr(mt, 'base_channels', 64)
+            drop = getattr(mt, 'dropout_rate', 0.0)
+
+            print(f"  Rebuilding FlowMatchingUNet: "
+                  f"cond={input_chan}, target={output_chan}, "
+                  f"base={base_ch}, dropout={drop}")
+
+            mt.flow_model = FlowMatchingUNet(
+                cond_channels=input_chan,
+                target_channels=output_chan,
+                base_channels=base_ch,
+                dropout_rate=drop)
+
+            fm_path = os.path.join(model_folder, 'flow_model.weights')
+            mt.flow_model.load_state_dict(
+                torch.load(fm_path, map_location='cpu', weights_only=False))
+            print(f"  Loaded flow_model weights from {fm_path}")
+
+        mt.flow_model.to(device)
+        mt.flow_model.eval()
+
+    else:
+        # Standard/legacy UNET uses encoder + decoder
+        if mt.encoder is None or mt.decoder is None:
+            from cae_tools.models.standard_unet import (
+                StandardEncoder, StandardDecoder)
+
+            arch = getattr(mt, 'architecture', 'standard')
+            input_chan = mt.input_shape[0]
+            output_chan = mt.output_shape[0]
+            base_ch = getattr(mt, 'base_channels', 64)
+            drop = getattr(mt, 'dropout_rate', 0.0)
+            out_act = getattr(mt, 'output_activation', 'none')
+
+            print(f"  Rebuilding encoder/decoder: arch={arch}, "
+                  f"in={input_chan}, out={output_chan}, "
+                  f"base={base_ch}, dropout={drop}, "
+                  f"output_activation={out_act}")
+
+            if arch == 'standard':
+                mt.encoder = StandardEncoder(
+                    in_channels=input_chan,
+                    base_channels=base_ch,
+                    dropout_rate=drop)
+                mt.decoder = StandardDecoder(
+                    out_channels=output_chan,
+                    base_channels=base_ch,
+                    dropout_rate=drop,
+                    output_activation=out_act)
+            else:
+                raise ValueError(
+                    f"Cannot rebuild encoder/decoder for "
+                    f"architecture='{arch}'. Only 'standard' is supported "
+                    f"by this script.")
+
+            enc_path = os.path.join(model_folder, 'encoder.weights')
+            dec_path = os.path.join(model_folder, 'decoder.weights')
+            mt.encoder.load_state_dict(
+                torch.load(enc_path, map_location='cpu', weights_only=False))
+            mt.decoder.load_state_dict(
+                torch.load(dec_path, map_location='cpu', weights_only=False))
+            print(f"  Loaded encoder/decoder weights from checkpoint")
+
+        mt.encoder.to(device)
+        mt.encoder.eval()
+        mt.decoder.to(device)
+        mt.decoder.eval()
+
+    return mt, model_type
 
 
 def denormalize_output(arr, norm_params, output_activation='sigmoid'):
@@ -130,27 +212,37 @@ def denormalize_output(arr, norm_params, output_activation='sigmoid'):
         return arr * range_out + min_out
 
 
-def run_inference(mt, inputs, device, batch_size=256):
+def run_inference(mt, model_type, inputs, device, batch_size=256):
     """Run model inference in batches, return normalized predictions.
 
-    Handles both model types:
-      UNET:        encoder(batch) -> (encoded, skips), decoder(encoded, skips) -> output
-      LinearModel: weights(batch) -> output
+    Args:
+        mt: loaded model (UNET or LinearModel)
+        model_type: 'UNET_standard', 'UNET_flow_matching', or 'LinearModel'
+        inputs: tensor of shape (N, C, H, W)
+        device: torch device
+        batch_size: inference batch size
     """
     n = inputs.shape[0]
     out_shape = (n, mt.output_shape[0], mt.output_shape[1], mt.output_shape[2])
     predictions = torch.zeros(out_shape, dtype=torch.float32)
 
-    is_unet = hasattr(mt, 'encoder') and mt.encoder is not None
+    flow_steps = getattr(mt, 'flow_steps', 4)
 
     with torch.no_grad():
         for start in range(0, n, batch_size):
             end = min(start + batch_size, n)
             batch = inputs[start:end].to(device)
 
-            if is_unet:
+            if model_type == 'UNET_standard':
                 encoded, skips = mt.encoder(batch)
                 pred = mt.decoder(encoded, skips)
+            elif model_type == 'UNET_flow_matching':
+                B = batch.shape[0]
+                target_shape = (B, mt.output_shape[0],
+                                batch.shape[2], batch.shape[3])
+                pred = flow_matching_sample(
+                    mt.flow_model, batch, target_shape,
+                    num_steps=flow_steps, device=device)
             else:
                 pred = mt.weights(batch)
 
@@ -622,7 +714,7 @@ def main():
 
     # ── Load model ──
     print(f"\nLoading model: {args.model_folder}")
-    mt = load_model(args.model_folder, device)
+    mt, model_type = load_model(args.model_folder, device)
     print(f"  Architecture: {mt.architecture if hasattr(mt, 'architecture') else 'unknown'}")
     print(f"  Input shape: {mt.input_shape}, Output shape: {mt.output_shape}")
 
@@ -639,7 +731,7 @@ def main():
     print(f"\nRunning inference on {inputs.shape[0]} boxes "
           f"(batch_size={args.batch_size})...")
     t0 = time.time()
-    pred_norm = run_inference(mt, inputs, device, args.batch_size)
+    pred_norm = run_inference(mt, model_type, inputs, device, args.batch_size)
     print(f"  Inference complete in {time.time()-t0:.1f}s")
 
     # ── Denormalize ──
@@ -715,6 +807,7 @@ Cold boxes (<280K):   {m['Cold_Boxes_lt280K']} / {m['n_boxes']} ({m['Cold_Box_Pc
     # ── Build results dict ──
     results = {
         "model": args.model_folder,
+        "model_type": model_type,
         "data": args.data_pt,
         "label": data_label,
         "n_boxes": int(inputs.shape[0]),
