@@ -6,27 +6,37 @@ Works on any .pt file (train, test, or validation) that follows the
 standard preprocess_data format with 'inputs' and 'outputs' keys.
 
 Loads model checkpoint, runs inference, denormalizes to Kelvin,
-computes metrics, and optionally generates comparison figures.
+computes metrics, and generates comparison figures.
 
 Metrics: ME, MAE, RMSE, Median, STD, RSTD, R², Pearson R,
          error histogram, cold pixel analysis.
 
-Figures: N evenly-spaced sample boxes showing Target | Prediction | Error
-         with aligned colorbars (pcolormesh, no interpolation).
+Figures:
+  - Summary page: scatter density + error histogram
+  - Contact sheets: grid of boxes (default 8x4 = 32 per page)
+    Each cell shows Target | Prediction | Error side-by-side
+    Sorted by RMSE (worst-first) so bad predictions appear on early pages
 
 Usage:
-    # Quick terminal check (no file output)
+    # Quick terminal check (no figures)
     python evaluate_holdout.py \\
         --model-folder /path/to/checkpoint_best_test_mse \\
         --data-pt /path/to/validation_v8_zscore_rm_coldpattern.pt
 
-    # Full evaluation with figures and JSON
+    # Full evaluation with all boxes plotted as contact sheets
     python evaluate_holdout.py \\
         --model-folder /path/to/checkpoint_best_test_mse \\
         --data-pt /path/to/validation_v8_zscore_rm_coldpattern.pt \\
         --output-json results/holdout_results.json \\
         --output-figures results/figures/ \\
-        --n-samples 24
+        --n-samples all
+
+    # Only worst 500 boxes
+    python evaluate_holdout.py \\
+        --model-folder /path/to/checkpoint_best_test_mse \\
+        --data-pt /path/to/validation_v8_zscore_rm_coldpattern.pt \\
+        --output-figures results/figures/ \\
+        --n-samples 500
 """
 
 import argparse
@@ -41,19 +51,61 @@ import torch
 sys.path.insert(0, '/home/users/shaerdan/cae_tools_pB/src')
 
 from cae_tools.models.unet import UNET
+from cae_tools.models.linear_model import LinearModel
+
+
+# ---------------------------------------------------------------------------
+# Model loading and inference
+# ---------------------------------------------------------------------------
+
+def detect_model_type(model_folder):
+    """Read parameters.json to determine model type.
+
+    Returns 'UNET' or 'LinearModel'.
+    """
+    parameters_path = os.path.join(model_folder, 'parameters.json')
+    if not os.path.exists(parameters_path):
+        raise FileNotFoundError(
+            f"No parameters.json found in {model_folder}. "
+            f"Is this a valid model checkpoint?")
+
+    with open(parameters_path) as f:
+        parameters = json.load(f)
+
+    model_type = parameters.get('type', None)
+    if model_type is None:
+        # Fallback: if 'encoded_dim_size' exists, it's a UNET
+        if 'encoded_dim_size' in parameters:
+            model_type = 'UNET'
+        else:
+            model_type = 'LinearModel'
+
+    if model_type not in ('UNET', 'LinearModel'):
+        raise ValueError(
+            f"Unknown model type '{model_type}' in {parameters_path}")
+
+    return model_type
 
 
 def load_model(model_folder, device):
-    """Load UNET model from checkpoint folder."""
-    mt = UNET()
-    mt.load(model_folder)
+    """Load model from checkpoint folder. Auto-detects UNET vs LinearModel."""
+    model_type = detect_model_type(model_folder)
+    print(f"  Detected model type: {model_type}")
 
-    if mt.encoder is not None:
-        mt.encoder.to(device)
-        mt.encoder.eval()
-    if mt.decoder is not None:
-        mt.decoder.to(device)
-        mt.decoder.eval()
+    if model_type == 'UNET':
+        mt = UNET()
+        mt.load(model_folder)
+        if mt.encoder is not None:
+            mt.encoder.to(device)
+            mt.encoder.eval()
+        if mt.decoder is not None:
+            mt.decoder.to(device)
+            mt.decoder.eval()
+    else:
+        mt = LinearModel()
+        mt.load(model_folder)
+        mt.weights.to(device)
+        mt.weights.eval()
 
     return mt
 
@@ -79,36 +131,43 @@ def denormalize_output(arr, norm_params, output_activation='sigmoid'):
 
 
 def run_inference(mt, inputs, device, batch_size=256):
-    """Run model inference in batches, return normalized predictions."""
+    """Run model inference in batches, return normalized predictions.
+
+    Handles both model types:
+      UNET:        encoder(batch) -> (encoded, skips), decoder(encoded, skips) -> output
+      LinearModel: weights(batch) -> output
+    """
     n = inputs.shape[0]
-    predictions = torch.zeros(n, 1, inputs.shape[2], inputs.shape[3],
-                              dtype=torch.float32)
+    out_shape = (n, mt.output_shape[0], mt.output_shape[1], mt.output_shape[2])
+    predictions = torch.zeros(out_shape, dtype=torch.float32)
+
+    is_unet = hasattr(mt, 'encoder') and mt.encoder is not None
 
     with torch.no_grad():
         for start in range(0, n, batch_size):
             end = min(start + batch_size, n)
             batch = inputs[start:end].to(device)
 
-            if mt.architecture == 'flow_matching' and mt.flow_model is not None:
-                from cae_tools.models.flow_matching_unet import flow_matching_sample
-                pred = flow_matching_sample(
-                    mt.flow_model, batch, mt.output_shape, mt.flow_steps, device
-                )
+            if is_unet:
+                encoded, skips = mt.encoder(batch)
+                pred = mt.decoder(encoded, skips)
             else:
-                encoded, skip = mt.encoder(batch)
-                pred = mt.decoder(encoded, skip)
+                pred = mt.weights(batch)
 
             predictions[start:end] = pred.cpu()
-
-            if (start // batch_size) % 10 == 0:
-                print(f"  Inference: {end}/{n} boxes ({100*end/n:.0f}%)",
+            if (start + batch_size) % (batch_size * 10) == 0 or end == n:
+                print(f"  Inference: {end}/{n} boxes ({100*end//n}%)",
                       flush=True)
 
     return predictions
 
 
+# ---------------------------------------------------------------------------
+# Metrics
+# ---------------------------------------------------------------------------
+
 def compute_metrics(pred_k, target_k):
-    """Compute comprehensive evaluation metrics.
+    """Compute evaluation metrics in Kelvin space.
 
     Args:
         pred_k: predictions in Kelvin, shape (N, 1, H, W)
@@ -189,30 +248,90 @@ def compute_metrics(pred_k, target_k):
     }
 
 
-def select_sample_indices(n_total, n_samples):
-    """Select n_samples indices spread evenly across the dataset.
+def compute_per_box_metrics(pred_k, target_k):
+    """Compute RMSE, MAE, ME, Median Error, Pearson R per box.
 
-    If boxes are chronologically ordered (as preprocess_data produces),
-    this naturally spreads samples across months.
+    Args:
+        pred_k: shape (N, 1, H, W) in Kelvin
+        target_k: shape (N, 1, H, W) in Kelvin
+
+    Returns:
+        dict with keys 'rmse', 'mae', 'me', 'median', 'pearson_r',
+        'mean_pred', 'mean_target', each a numpy array of shape (N,).
+
+    The per-box Pearson R measures spatial pattern fidelity within each
+    100x100 pixel box. Unlike the global Pearson R (which is inflated by
+    inter-box variance, e.g. cold Scotland vs warm London), the per-box
+    Pearson R isolates whether the model reproduces within-box structure
+    such as land-cover boundaries, elevation gradients, and urban heat.
     """
-    if n_samples >= n_total:
-        return list(range(n_total))
-    return [int(round(i * (n_total - 1) / (n_samples - 1)))
-            for i in range(n_samples)]
+    N = pred_k.shape[0]
+
+    # (N, H*W)
+    pred_flat = pred_k[:, 0, :, :].reshape(N, -1)
+    tgt_flat = target_k[:, 0, :, :].reshape(N, -1)
+    err = pred_flat - tgt_flat
+
+    rmse = np.sqrt(np.mean(err ** 2, axis=1))
+    mae = np.mean(np.abs(err), axis=1)
+    me = np.mean(err, axis=1)
+    median = np.median(err, axis=1)
+    mean_pred = np.mean(pred_flat, axis=1)
+    mean_target = np.mean(tgt_flat, axis=1)
+
+    # Per-box Pearson R: correlation between predicted and target pixel
+    # values within each box.  For a box where pred or target is spatially
+    # constant (zero variance), Pearson R is undefined — we set it to 0.0.
+    pred_centered = pred_flat - mean_pred[:, np.newaxis]
+    tgt_centered = tgt_flat - mean_target[:, np.newaxis]
+
+    # Numerator: sum of products of centered values (per box)
+    cov_xy = np.mean(pred_centered * tgt_centered, axis=1)
+
+    # Denominator: product of standard deviations
+    std_pred = np.std(pred_flat, axis=1)
+    std_tgt = np.std(tgt_flat, axis=1)
+    denom = std_pred * std_tgt
+
+    # Where either field is constant, correlation is undefined → 0.0
+    valid_denom = denom > 1e-10
+    pearson_r = np.where(valid_denom, cov_xy / denom, 0.0)
+
+    return {
+        'rmse': rmse,
+        'mae': mae,
+        'me': me,
+        'median': median,
+        'pearson_r': pearson_r,
+        'mean_pred': mean_pred,
+        'mean_target': mean_target,
+    }
 
 
-def generate_comparison_figures(pred_k, target_k, sample_indices,
-                                output_dir, data_label):
-    """Generate Target | Prediction | Error comparison figures.
+# ---------------------------------------------------------------------------
+# Figures: contact sheets
+# ---------------------------------------------------------------------------
 
-    Each figure shows one box as a 1x3 panel:
-      Left:   Landsat target (K)
-      Middle: Model prediction (K)
-      Right:  Error = Prediction - Target (K)
+def generate_contact_sheets(pred_k, target_k, box_indices, per_box,
+                            output_dir, data_label,
+                            rows_per_page=32, dpi=150):
+    """Generate contact sheet pages, each showing rows_per_page boxes.
 
-    Target and Prediction share the same colorbar range.
-    Error has a symmetric diverging colorbar centered on zero.
-    All panels use pcolormesh with no interpolation.
+    Each row renders a horizontal triplet: Target | Prediction | Error
+    as a (100, 302) composite image using imshow (pixel-perfect rendering).
+    The three 100x100 panels are separated by a 1-pixel white line.
+
+    Boxes are drawn in the order given by box_indices (caller controls sort).
+
+    Args:
+        pred_k: shape (N, 1, H, W) in Kelvin
+        target_k: shape (N, 1, H, W) in Kelvin
+        box_indices: 1-D array/list of box indices to plot, in display order
+        per_box: dict from compute_per_box_metrics (arrays of shape N)
+        output_dir: directory to write PNGs
+        data_label: string for titles and filenames
+        rows_per_page: number of boxes per page (default: 32)
+        dpi: output resolution
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -220,82 +339,145 @@ def generate_comparison_figures(pred_k, target_k, sample_indices,
 
     os.makedirs(output_dir, exist_ok=True)
 
-    n_figs = len(sample_indices)
-    print(f"\nGenerating {n_figs} comparison figures in {output_dir}/")
+    boxes_per_page = rows_per_page
+    n_boxes = len(box_indices)
+    n_pages = (n_boxes + boxes_per_page - 1) // boxes_per_page
 
-    for fig_idx, box_idx in enumerate(sample_indices):
-        tgt = target_k[box_idx, 0, :, :]
-        prd = pred_k[box_idx, 0, :, :]
-        err = prd - tgt
+    H = pred_k.shape[2]  # 100
+    W = pred_k.shape[3]  # 100
 
-        # Shared vmin/vmax covering both target and prediction
-        vmin_tp = min(float(np.nanmin(tgt)), float(np.nanmin(prd)))
-        vmax_tp = max(float(np.nanmax(tgt)), float(np.nanmax(prd)))
+    # Figure sizing: triplet is 3*W + 2 separator pixels wide, H pixels tall.
+    cell_w_in = (3 * W + 2) / dpi
+    cell_h_in = H / dpi
+    label_w = 1.2   # inches, left margin for row labels
+    gap = 0.04       # inches between rows
 
-        # Symmetric range for error panel
-        err_abs_max = max(abs(float(np.nanmin(err))),
-                          abs(float(np.nanmax(err))))
-        err_abs_max = max(err_abs_max, 0.5)  # at least ±0.5K
+    fig_w = label_w + cell_w_in + 0.1  # small right margin
 
-        # Per-box metrics
-        box_me = float(np.nanmean(err))
-        box_mae = float(np.nanmean(np.abs(err)))
-        box_rmse = float(np.sqrt(np.nanmean(err ** 2)))
+    print(f"\nGenerating {n_pages} contact sheet pages "
+          f"({boxes_per_page} boxes/page, "
+          f"{n_boxes} boxes total) in {output_dir}/")
 
-        fig, axes = plt.subplots(1, 3, figsize=(16, 4.5),
-                                 constrained_layout=True)
+    t0 = time.time()
 
-        # Target
-        im0 = axes[0].pcolormesh(tgt, vmin=vmin_tp, vmax=vmax_tp,
-                                  cmap='inferno', shading='nearest')
-        axes[0].set_title(f'Target (Landsat)\n'
-                          f'mean={np.nanmean(tgt):.1f}K',
-                          fontsize=10)
-        axes[0].set_aspect('equal')
-        axes[0].invert_yaxis()
-        plt.colorbar(im0, ax=axes[0], label='K', shrink=0.8)
+    for page_idx in range(n_pages):
+        start = page_idx * boxes_per_page
+        end = min(start + boxes_per_page, n_boxes)
+        page_box_indices = box_indices[start:end]
+        n_on_page = len(page_box_indices)
 
-        # Prediction
-        im1 = axes[1].pcolormesh(prd, vmin=vmin_tp, vmax=vmax_tp,
-                                  cmap='inferno', shading='nearest')
-        axes[1].set_title(f'Prediction (Model)\n'
-                          f'mean={np.nanmean(prd):.1f}K',
-                          fontsize=10)
-        axes[1].set_aspect('equal')
-        axes[1].invert_yaxis()
-        plt.colorbar(im1, ax=axes[1], label='K', shrink=0.8)
+        fig, axes = plt.subplots(
+            n_on_page, 1,
+            figsize=(fig_w,
+                     0.25 + n_on_page * (cell_h_in + gap) + 0.5),
+            dpi=dpi,
+            squeeze=False
+        )
 
-        # Error
-        im2 = axes[2].pcolormesh(err, vmin=-err_abs_max, vmax=err_abs_max,
-                                  cmap='RdBu_r', shading='nearest')
-        axes[2].set_title(f'Error (Pred \u2212 Target)\n'
-                          f'ME={box_me:+.2f}K  MAE={box_mae:.2f}K  '
-                          f'RMSE={box_rmse:.2f}K',
-                          fontsize=10)
-        axes[2].set_aspect('equal')
-        axes[2].invert_yaxis()
-        plt.colorbar(im2, ax=axes[2], label='K', shrink=0.8)
+        fig.suptitle(
+            f'{data_label}  —  page {page_idx+1}/{n_pages}  '
+            f'(boxes {start+1}–{end} of {n_boxes}, sorted worst-first)',
+            fontsize=8, fontweight='bold', y=0.995
+        )
 
-        for ax in axes:
+        for row_idx, bi in enumerate(page_box_indices):
+            ax = axes[row_idx, 0]
+
+            tgt = target_k[bi, 0, :, :]   # (H, W)
+            prd = pred_k[bi, 0, :, :]     # (H, W)
+            err = prd - tgt               # (H, W)
+
+            # Shared vmin/vmax for target and prediction
+            vmin_tp = min(float(np.nanmin(tgt)), float(np.nanmin(prd)))
+            vmax_tp = max(float(np.nanmax(tgt)), float(np.nanmax(prd)))
+
+            # Symmetric range for error, at least ±1K
+            err_abs_max = max(abs(float(np.nanmin(err))),
+                              abs(float(np.nanmax(err))),
+                              1.0)
+
+            # Normalize arrays to [0, 1] for RGB compositing
+            # Target and prediction: shared linear scale
+            range_tp = vmax_tp - vmin_tp
+            if range_tp < 1e-6:
+                range_tp = 1.0
+            tgt_norm = np.clip((tgt - vmin_tp) / range_tp, 0, 1)
+            prd_norm = np.clip((prd - vmin_tp) / range_tp, 0, 1)
+
+            # Error: symmetric around 0, mapped to [-1, 1]
+            err_norm = np.clip(err / err_abs_max, -1, 1)
+
+            # Apply colormaps to get RGB arrays (H, W, 3)
+            import matplotlib.cm as cm
+            tgt_rgb = cm.inferno(tgt_norm)[:, :, :3]
+            prd_rgb = cm.inferno(prd_norm)[:, :, :3]
+
+            # RdBu_r: 0.0 = blue (negative), 0.5 = white (zero), 1.0 = red (positive)
+            err_rgb = cm.RdBu_r((err_norm + 1) / 2)[:, :, :3]
+
+            # Separator column (1 pixel wide, white)
+            sep = np.ones((H, 1, 3), dtype=np.float64)
+
+            # Composite: target | sep | prediction | sep | error
+            composite = np.concatenate([tgt_rgb, sep, prd_rgb, sep, err_rgb],
+                                       axis=1)  # (H, 3W+2, 3)
+
+            ax.imshow(composite, aspect='equal', interpolation='nearest')
             ax.set_xticks([])
             ax.set_yticks([])
 
-        fig.suptitle(f'{data_label}  \u2014  Box {box_idx} '
-                     f'(sample {fig_idx+1}/{n_figs})',
-                     fontsize=12, fontweight='bold')
+            # Row label: box index + per-box metrics
+            rmse_i = per_box['rmse'][bi]
+            mae_i = per_box['mae'][bi]
+            me_i = per_box['me'][bi]
+            median_i = per_box['median'][bi]
+            pearson_i = per_box['pearson_r'][bi]
+            mean_pred_i = per_box['mean_pred'][bi]
+            mean_tgt_i = per_box['mean_target'][bi]
+            ax.set_ylabel(
+                f'#{bi}  RMSE={rmse_i:.1f}  MAE={mae_i:.1f}  '
+                f'ME={me_i:+.1f}  Med={median_i:+.1f}\n'
+                f'R={pearson_i:.3f}  '
+                f'pred={mean_pred_i:.0f}K  tgt={mean_tgt_i:.0f}K',
+                fontsize=5, rotation=0, labelpad=75,
+                verticalalignment='center'
+            )
 
-        fname = os.path.join(output_dir,
-                             f'comparison_{data_label}_box{box_idx:05d}.png')
-        fig.savefig(fname, dpi=150, bbox_inches='tight')
+        # Column header on the first row's axes
+        # Mark the three panels: Target | Prediction | Error
+        first_ax = axes[0, 0]
+        first_ax.text(W * 0.5, -3, 'Target', fontsize=6,
+                      ha='center', va='bottom', transform=first_ax.transData)
+        first_ax.text(W * 1.5 + 1, -3, 'Prediction', fontsize=6,
+                      ha='center', va='bottom', transform=first_ax.transData)
+        first_ax.text(W * 2.5 + 2, -3, 'Error', fontsize=6,
+                      ha='center', va='bottom', transform=first_ax.transData)
+
+        plt.subplots_adjust(left=0.15, right=0.98, top=0.96, bottom=0.01,
+                            hspace=0.15)
+
+        fname = os.path.join(
+            output_dir,
+            f'contact_{data_label}_page{page_idx+1:04d}.png'
+        )
+        fig.savefig(fname, dpi=dpi, bbox_inches='tight')
         plt.close(fig)
 
-        if (fig_idx + 1) % 8 == 0 or fig_idx == n_figs - 1:
-            print(f"  Figures: {fig_idx+1}/{n_figs}", flush=True)
+        if (page_idx + 1) % 10 == 0 or page_idx == n_pages - 1:
+            elapsed = time.time() - t0
+            rate = (page_idx + 1) / elapsed
+            remaining = (n_pages - page_idx - 1) / rate if rate > 0 else 0
+            print(f"  Pages: {page_idx+1}/{n_pages} "
+                  f"({elapsed:.0f}s elapsed, ~{remaining:.0f}s remaining)",
+                  flush=True)
 
-    print(f"  Saved {n_figs} comparison figures to {output_dir}/")
+    elapsed = time.time() - t0
+    print(f"  Done: {n_pages} pages in {elapsed:.1f}s "
+          f"({elapsed/n_pages:.2f}s/page)")
 
 
-def generate_summary_figure(pred_k, target_k, metrics, output_path, data_label):
+def generate_summary_figure(pred_k, target_k, metrics, output_path,
+                            data_label):
     """Generate a single-page summary: scatter density + error histogram."""
     import matplotlib
     matplotlib.use('Agg')
@@ -310,7 +492,7 @@ def generate_summary_figure(pred_k, target_k, metrics, output_path, data_label):
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.5), constrained_layout=True)
 
-    # Density scatter (hexbin)
+    # Density scatter (hexbin) — subsample for speed
     n_plot = min(len(pred), 500_000)
     if n_plot < len(pred):
         rng = np.random.default_rng(42)
@@ -330,7 +512,12 @@ def generate_summary_figure(pred_k, target_k, metrics, output_path, data_label):
                        f'R\u00b2={metrics["R_squared"]:.4f}  '
                        f'RMSE={metrics["RMSE"]:.3f}K  '
                        f'MAE={metrics["MAE"]:.3f}K  '
-                       f'N={metrics["n_pixels"]:,}')
+                       f'N={metrics["n_pixels"]:,}\n'
+                       f'Box Pearson R: '
+                       f'mean={metrics.get("Box_Pearson_R_Mean", 0):.4f}  '
+                       f'median={metrics.get("Box_Pearson_R_Median", 0):.4f}  '
+                       f'std={metrics.get("Box_Pearson_R_Std", 0):.4f}',
+                       fontsize=9)
     axes[0].set_aspect('equal')
 
     # Error histogram
@@ -349,10 +536,15 @@ def generate_summary_figure(pred_k, target_k, metrics, output_path, data_label):
                        f'RSTD={metrics["RSTD_Error"]:.3f}K')
     axes[1].legend(fontsize=9)
 
+    os.makedirs(os.path.dirname(output_path) or '.', exist_ok=True)
     fig.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     print(f"Summary figure saved to {output_path}")
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
@@ -368,67 +560,89 @@ def main():
                         help="Path to save human-readable results")
     parser.add_argument("--output-figures", default=None,
                         help="Directory to save comparison figures")
-    parser.add_argument("--n-samples", type=int, default=24,
-                        help="Number of sample comparison figures "
-                             "(default: 24, spread evenly across dataset)")
+    parser.add_argument("--n-samples", default="all",
+                        help="Number of boxes to plot: integer or 'all' "
+                             "(default: all)")
+    parser.add_argument("--sort-by", default="rmse_desc",
+                        choices=["rmse_desc", "rmse_asc",
+                                 "mae_desc", "mae_asc",
+                                 "me_desc", "me_asc",
+                                 "pearson_asc", "pearson_desc",
+                                 "index"],
+                        help="Sort order for contact sheets "
+                             "(default: rmse_desc = worst first). "
+                             "pearson_asc = worst spatial correlation first.")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="RNG seed for deterministic sample selection "
+                             "when --n-samples < total boxes. "
+                             "Fixed default (42) ensures the same boxes are "
+                             "selected across different model evaluations. "
+                             "(default: 42)")
+    parser.add_argument("--rows-per-page", type=int, default=32,
+                        help="Boxes per contact sheet page (default: 32)")
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--device", default=None,
                         help="Device (cuda/cpu, auto-detected if not set)")
     parser.add_argument("--label", default=None,
-                        help="Label for figures "
-                             "(auto-derived from filename if not set)")
+                        help="Label for this evaluation run")
+    parser.add_argument("--dpi", type=int, default=150,
+                        help="DPI for output figures (default: 150)")
+
     args = parser.parse_args()
 
-    # Auto-derive label from filename
-    if args.label:
-        data_label = args.label
-    else:
-        data_label = os.path.splitext(os.path.basename(args.data_pt))[0]
-
-    # Device selection
-    if args.device:
-        device = torch.device(args.device)
-    else:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    # Load data
+    # ── Load data ──
     print(f"Loading data: {args.data_pt}")
     t0 = time.time()
-    val_data = torch.load(args.data_pt, map_location="cpu")
-    inputs = val_data['inputs']
-    targets = val_data['outputs']
-    norm_params = val_data['normalisation_parameters']
-    output_activation = val_data.get('output_activation', 'sigmoid')
-    input_variables = val_data.get('input_variables', [])
+    data = torch.load(args.data_pt, map_location='cpu', weights_only=False)
+    inputs = data['inputs']
+    targets = data['outputs']
+    norm_params = data['normalisation_parameters']
+    input_variables = data.get('input_variables', [])
+    output_activation = data.get('output_activation', 'sigmoid')
     print(f"  Loaded {inputs.shape[0]} boxes in {time.time()-t0:.1f}s")
-    print(f"  Input shape: {inputs.shape}, Output shape: {targets.shape}")
+    print(f"  Input shape: {inputs.shape}, "
+          f"Output shape: {targets.shape}")
     print(f"  Output activation: {output_activation}")
     print(f"  Input variables: {input_variables}")
 
-    # Load model
+    # ── Label ──
+    data_label = args.label
+    if data_label is None:
+        basename = os.path.basename(args.data_pt)
+        data_label = basename.replace('.pt', '').replace('_v8_zscore_rm_coldpattern', '')
+
+    # ── Device ──
+    if args.device:
+        device = torch.device(args.device)
+    else:
+        device = (torch.device("cuda")
+                  if torch.cuda.is_available()
+                  else torch.device("cpu"))
+    print(f"  Using device: {device}")
+
+    # ── Load model ──
     print(f"\nLoading model: {args.model_folder}")
     mt = load_model(args.model_folder, device)
-    print(f"  Architecture: {mt.architecture}")
+    print(f"  Architecture: {mt.architecture if hasattr(mt, 'architecture') else 'unknown'}")
     print(f"  Input shape: {mt.input_shape}, Output shape: {mt.output_shape}")
 
-    # Verify channel count compatibility
-    model_in_channels = mt.input_shape[0] if mt.input_shape else None
+    # ── Channel check ──
+    model_in_channels = mt.input_shape[0]
     data_in_channels = inputs.shape[1]
-    if model_in_channels and model_in_channels != data_in_channels:
-        print(f"\n*** FATAL: Channel mismatch! Model expects "
+    if model_in_channels != data_in_channels:
+        print(f"\n*** CHANNEL MISMATCH: Model expects "
               f"{model_in_channels} channels but data has "
               f"{data_in_channels}. ***")
         sys.exit(1)
 
-    # Run inference
+    # ── Inference ──
     print(f"\nRunning inference on {inputs.shape[0]} boxes "
           f"(batch_size={args.batch_size})...")
     t0 = time.time()
     pred_norm = run_inference(mt, inputs, device, args.batch_size)
     print(f"  Inference complete in {time.time()-t0:.1f}s")
 
-    # Denormalize to Kelvin
+    # ── Denormalize ──
     print("\nDenormalizing to Kelvin...")
     pred_k = denormalize_output(pred_norm.numpy(), norm_params,
                                 output_activation)
@@ -437,23 +651,24 @@ def main():
     print(f"  Prediction range: [{pred_k.min():.1f}K, {pred_k.max():.1f}K]")
     print(f"  Target range:     [{target_k.min():.1f}K, {target_k.max():.1f}K]")
 
-    # Compute metrics
-    print("\nComputing metrics...")
+    # ── Global metrics ──
+    print("\nComputing global metrics...")
     metrics = compute_metrics(pred_k, target_k)
 
-    # Build results
-    results = {
-        "model": args.model_folder,
-        "data": args.data_pt,
-        "label": data_label,
-        "n_boxes": int(inputs.shape[0]),
-        "device": str(device),
-        "output_activation": output_activation,
-        "input_variables": input_variables,
-        "metrics": metrics,
-    }
+    # ── Per-box metrics (needed for sorting, labels, and box Pearson stats) ──
+    print("Computing per-box metrics...")
+    per_box = compute_per_box_metrics(pred_k, target_k)
 
-    # Print summary
+    # Add box-level Pearson R aggregates to global metrics.
+    # These measure spatial pattern fidelity per 10km box, unlike the
+    # global Pearson R which is inflated by inter-box temperature variance.
+    metrics['Box_Pearson_R_Mean'] = float(np.mean(per_box['pearson_r']))
+    metrics['Box_Pearson_R_Median'] = float(np.median(per_box['pearson_r']))
+    metrics['Box_Pearson_R_Std'] = float(np.std(per_box['pearson_r']))
+    metrics['Box_Pearson_R_P5'] = float(np.percentile(per_box['pearson_r'], 5))
+    metrics['Box_Pearson_R_P25'] = float(np.percentile(per_box['pearson_r'], 25))
+
+    # ── Print summary ──
     m = metrics
     summary = f"""
 ============================================
@@ -471,8 +686,15 @@ RMSE:           {m['RMSE']:.4f} K
 Median Error:   {m['Median_Error']:+.4f} K
 STD(error):     {m['STD_Error']:.4f} K
 RSTD(error):    {m['RSTD_Error']:.4f} K
-R²:             {m['R_squared']:.6f}
-Pearson R:      {m['Pearson_R']:.6f}
+R² (global):    {m['R_squared']:.6f}
+Pearson R (global):  {m['Pearson_R']:.6f}
+--------------------------------------------
+Box Pearson R (spatial pattern fidelity):
+  Mean:         {m['Box_Pearson_R_Mean']:.6f}
+  Median:       {m['Box_Pearson_R_Median']:.6f}
+  Std:          {m['Box_Pearson_R_Std']:.6f}
+  P5:           {m['Box_Pearson_R_P5']:.6f}
+  P25:          {m['Box_Pearson_R_P25']:.6f}
 --------------------------------------------
 P5  error:      {m['P5_Error']:+.3f} K
 P25 error:      {m['Q25_Error']:+.3f} K
@@ -490,35 +712,103 @@ Cold boxes (<280K):   {m['Cold_Boxes_lt280K']} / {m['n_boxes']} ({m['Cold_Box_Pc
 """
     print(summary)
 
-    # Save JSON
+    # ── Build results dict ──
+    results = {
+        "model": args.model_folder,
+        "data": args.data_pt,
+        "label": data_label,
+        "n_boxes": int(inputs.shape[0]),
+        "device": str(device),
+        "output_activation": output_activation,
+        "input_variables": input_variables,
+        "metrics": metrics,
+    }
+
+    # ── Save JSON ──
     if args.output_json:
         os.makedirs(os.path.dirname(args.output_json) or '.', exist_ok=True)
         with open(args.output_json, 'w') as f:
             json.dump(results, f, indent=2)
         print(f"Results JSON saved to {args.output_json}")
 
-    # Save text
+    # ── Save text ──
     if args.output_text:
         os.makedirs(os.path.dirname(args.output_text) or '.', exist_ok=True)
         with open(args.output_text, 'w') as f:
             f.write(summary)
         print(f"Text summary saved to {args.output_text}")
 
-    # Generate figures
+    # ── Generate figures ──
     if args.output_figures:
         fig_dir = args.output_figures
 
         # Summary figure (scatter + histogram)
         summary_path = os.path.join(fig_dir, f'summary_{data_label}.png')
-        os.makedirs(fig_dir, exist_ok=True)
         generate_summary_figure(pred_k, target_k, metrics,
                                 summary_path, data_label)
 
-        # Per-box comparison figures
-        sample_indices = select_sample_indices(inputs.shape[0],
-                                               args.n_samples)
-        generate_comparison_figures(pred_k, target_k, sample_indices,
-                                    fig_dir, data_label)
+        # Determine which boxes to plot
+        n_total = pred_k.shape[0]
+        if args.n_samples == 'all':
+            n_to_plot = n_total
+            # When plotting all boxes, no random selection needed
+            selected_indices = np.arange(n_total)
+        else:
+            n_to_plot = min(int(args.n_samples), n_total)
+            if n_to_plot == n_total:
+                selected_indices = np.arange(n_total)
+            else:
+                # Deterministic random selection with fixed seed.
+                # The seed is fixed (default=42) so that the SAME boxes
+                # are selected regardless of which model is being evaluated.
+                # This enables apples-to-apples visual comparison across models.
+                rng = np.random.default_rng(args.seed)
+                selected_indices = rng.choice(n_total, n_to_plot, replace=False)
+                print(f"\n  Sample selection: {n_to_plot} of {n_total} boxes "
+                      f"(seed={args.seed})")
+
+        # Sort the selected boxes for display order.
+        # Sorting is applied AFTER selection, so it only affects page ordering,
+        # not which boxes are chosen.
+        if args.sort_by == 'rmse_desc':
+            display_order = np.argsort(-per_box['rmse'][selected_indices])
+        elif args.sort_by == 'rmse_asc':
+            display_order = np.argsort(per_box['rmse'][selected_indices])
+        elif args.sort_by == 'mae_desc':
+            display_order = np.argsort(-per_box['mae'][selected_indices])
+        elif args.sort_by == 'mae_asc':
+            display_order = np.argsort(per_box['mae'][selected_indices])
+        elif args.sort_by == 'me_desc':
+            display_order = np.argsort(-np.abs(per_box['me'][selected_indices]))
+        elif args.sort_by == 'me_asc':
+            display_order = np.argsort(np.abs(per_box['me'][selected_indices]))
+        elif args.sort_by == 'pearson_asc':
+            display_order = np.argsort(per_box['pearson_r'][selected_indices])
+        elif args.sort_by == 'pearson_desc':
+            display_order = np.argsort(-per_box['pearson_r'][selected_indices])
+        else:  # 'index'
+            display_order = np.argsort(selected_indices)
+
+        box_indices = selected_indices[display_order]
+
+        # Print sort-order stats for the selected boxes
+        sel_rmse = per_box['rmse'][box_indices]
+        print(f"\nSelected {n_to_plot} boxes (sort={args.sort_by}):")
+        print(f"  RMSE range: [{sel_rmse.min():.2f}, {sel_rmse.max():.2f}] K")
+        print(f"  RMSE median: {np.median(sel_rmse):.2f} K")
+
+        # Estimate output size
+        # Each page: ~200-400 KB PNG.
+        n_pages = (n_to_plot + args.rows_per_page - 1) // args.rows_per_page
+        est_mb = n_pages * 0.3  # ~300 KB per page
+        print(f"  Estimated output: {n_pages} pages, ~{est_mb:.0f} MB")
+
+        generate_contact_sheets(
+            pred_k, target_k, box_indices, per_box,
+            fig_dir, data_label,
+            rows_per_page=args.rows_per_page,
+            dpi=args.dpi
+        )
 
 
 if __name__ == '__main__':

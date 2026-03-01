@@ -52,6 +52,7 @@ class LinearModel(BaseModel):
                 'pixel_linear' - per-pixel linear via Conv2d(C,1,1). Default.
                 'pixel_mlp'    - per-pixel MLP via stacked Conv2d 1x1 layers
         """
+        super().__init__()
         self.normalise_input = normalise_input
         self.normalise_output = normalise_output
         self.normalisation_parameters = None
@@ -137,37 +138,46 @@ class LinearModel(BaseModel):
             self.architecture, self.input_shape, self.output_shape)
 
         weights_path = os.path.join(from_folder, "weights")
-        self.weights.load_state_dict(torch.load(weights_path, weights_only=True))
+        self.weights.load_state_dict(torch.load(weights_path, map_location="cpu", weights_only=False))
         self.weights.eval()
         super().load(from_folder)
 
-    def __train_epoch(self, batches):
-        self.weights.train()
-        train_loss = []
-        for (low_res, high_res, labels) in batches:
-            estimates = self.weights(low_res)
-            loss = self.loss_fn(estimates, high_res)
-            self.optim.zero_grad()
-            loss.backward()
-            self.optim.step()
-            train_loss.append(loss.detach().cpu().numpy())
-        mean_loss = np.mean(train_loss)
-        return float(mean_loss)
-
-    def __test_epoch(self, batches, save_arr=None):
-        test_loss = []
-        self.weights.eval()
-        with torch.no_grad():
-            ctr = 0
+    def __train_epoch(self, batches, device=None):
+            self.weights.train()
+            train_loss = []
+            train_mae = []
             for (low_res, high_res, labels) in batches:
+                if device is not None:
+                    low_res = low_res.to(device, non_blocking=True)
+                    high_res = high_res.to(device, non_blocking=True)
                 estimates = self.weights(low_res)
                 loss = self.loss_fn(estimates, high_res)
-                test_loss.append(loss.detach().cpu().numpy())
-                if save_arr is not None:
-                    save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
-                ctr += self.batch_size
-        mean_loss = np.mean(test_loss)
-        return float(mean_loss)
+                self.optim.zero_grad()
+                loss.backward()
+                self.optim.step()
+                train_loss.append(loss.detach().cpu().numpy())
+                with torch.no_grad():
+                    train_mae.append((estimates - high_res).abs().mean().item())
+            return float(np.mean(train_loss)), float(np.mean(train_mae))
+
+    def __test_epoch(self, batches, device=None, save_arr=None):
+            test_loss = []
+            test_mae = []
+            self.weights.eval()
+            with torch.no_grad():
+                ctr = 0
+                for (low_res, high_res, labels) in batches:
+                    if device is not None:
+                        low_res = low_res.to(device, non_blocking=True)
+                        high_res = high_res.to(device, non_blocking=True)
+                    estimates = self.weights(low_res)
+                    loss = self.loss_fn(estimates, high_res)
+                    test_loss.append(loss.detach().cpu().numpy())
+                    test_mae.append((estimates - high_res).abs().mean().item())
+                    if save_arr is not None:
+                        save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
+                    ctr += self.batch_size
+            return float(np.mean(test_loss)), float(np.mean(test_mae))
 
     def score(self, batches, save_arr):
         self.weights.eval()
@@ -181,7 +191,6 @@ class LinearModel(BaseModel):
     def train(self, input_variables, output_variable, training_ds, testing_ds,
               model_path="", training_paths="", testing_paths=""):
         """Train from xarray datasets (legacy .nc workflow)."""
-        super().__init__()
         train_ds = DSDataset(training_ds, input_variables, output_variable,
                              normalise_in=self.normalise_input,
                              normalise_out=self.normalise_output)
@@ -262,64 +271,58 @@ class LinearModel(BaseModel):
         self._run_training(train_loader, test_loader, model_path)
 
     def _run_training(self, train_loader, test_loader, model_path):
-        """Shared training loop used by both train() and train_from_datasets()."""
-        if self.use_gpu:
-            device = torch.device("cuda") if torch.cuda.is_available() \
-                else torch.device("cpu")
-        else:
-            device = torch.device("cpu")
-        print(f"Running on device: {device}")
-
-        self.weights.to(device)
-
-        # Prepare batches on device
-        train_batches = []
-        for low_res, high_res, labels in train_loader:
-            train_batches.append(
-                (low_res.to(device), high_res.to(device), labels))
-
-        test_batches = []
-        for low_res, high_res, labels in test_loader:
-            test_batches.append(
-                (low_res.to(device), high_res.to(device), labels))
-
-        self.optim = torch.optim.Adam(
-            self.weights.parameters(), lr=self.lr,
-            weight_decay=self.weight_decay)
-
-        best_test_loss = float('inf')
-
-        for epoch in range(self.nr_epochs):
-            train_loss = self.__train_epoch(train_batches)
-            self.history['train_loss'].append(train_loss)
-            self.history['nr_epochs'] = epoch + 1
-
-            if epoch % self.test_interval == 0:
-                test_loss = self.__test_epoch(test_batches)
-                self.history['test_loss'].append(test_loss)
-
-                # Compute physical-space metrics using normalisation params
-                out_range = self._get_output_range_k()
-                train_rmse_k = train_loss ** 0.5 * out_range
-                test_rmse_k = test_loss ** 0.5 * out_range
-
-                print(f"epoch {epoch:4d}  "
-                      f"train_mse={train_loss:.6f}  "
-                      f"test_mse={test_loss:.6f}  "
-                      f"train_rmse={train_rmse_k:.2f}K  "
-                      f"test_rmse={test_rmse_k:.2f}K")
-
-                if test_loss < best_test_loss:
-                    best_test_loss = test_loss
-                    self.history['best_test_mse'] = float(best_test_loss)
-                    if model_path:
-                        self.save(model_path)
-
-        # Final save
-        if model_path:
-            self.save(model_path)
-        print(f"\nTraining complete. Best test MSE: {best_test_loss:.6f} "
-              f"(RMSE: {best_test_loss**0.5 * self._get_output_range_k():.2f}K)")
+            """Shared training loop used by both train() and train_from_datasets()."""
+            if self.use_gpu:
+                device = torch.device("cuda") if torch.cuda.is_available() \
+                    else torch.device("cpu")
+            else:
+                device = torch.device("cpu")
+            print(f"Running on device: {device}")
+    
+            self.weights.to(device)
+    
+            self.optim = torch.optim.Adam(
+                self.weights.parameters(), lr=self.lr,
+                weight_decay=self.weight_decay)
+    
+            best_test_loss = float('inf')
+    
+            for epoch in range(self.nr_epochs):
+                train_loss, train_mae = self.__train_epoch(train_loader, device)
+                self.history['train_loss'].append(train_loss)
+                self.history['nr_epochs'] = epoch + 1
+    
+                if epoch % self.test_interval == 0:
+                    test_loss, test_mae = self.__test_epoch(test_loader, device)
+                    self.history['test_loss'].append(test_loss)
+    
+                    out_range = self._get_output_range_k()
+    
+                    print(f"epoch {epoch:4d}  "
+                          f"train_mse={train_loss:.6f}  "
+                          f"test_mse={test_loss:.6f}")
+                    print(f"  metrics:    "
+                          f"train_rmse={train_loss**0.5:.6f}  "
+                          f"test_rmse={test_loss**0.5:.6f}  "
+                          f"train_mae={train_mae:.6f}  "
+                          f"test_mae={test_mae:.6f}  "
+                          f"rmse/mae={test_loss**0.5/max(test_mae,1e-10):.3f}")
+                    print(f"  physical:   "
+                          f"train_rmse={train_loss**0.5*out_range:.2f}K  "
+                          f"test_rmse={test_loss**0.5*out_range:.2f}K  "
+                          f"train_mae={train_mae*out_range:.2f}K  "
+                          f"test_mae={test_mae*out_range:.2f}K")
+    
+                    if test_loss < best_test_loss:
+                        best_test_loss = test_loss
+                        self.history['best_test_mse'] = float(best_test_loss)
+                        if model_path:
+                            self.save(model_path)
+    
+            if model_path:
+                self.save(model_path)
+            print(f"\nTraining complete. Best test MSE: {best_test_loss:.6f} "
+                  f"(RMSE: {best_test_loss**0.5 * self._get_output_range_k():.2f}K)")
 
     def _get_output_range_k(self):
         """Get output range in Kelvin for converting normalised metrics."""
