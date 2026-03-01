@@ -24,28 +24,34 @@ import time
 
 from .base_model import BaseModel
 from .ds_dataset import DSDataset
-from .linear import Linear
+from .linear import Linear, build_linear_model
 from ..utils.model_database import ModelDatabase
+
 
 class LinearModel(BaseModel):
 
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10,
-                 lr=0.001, weight_decay=1e-5, use_gpu=True, database_path=None):
+                 lr=0.001, weight_decay=1e-5, use_gpu=True, database_path=None,
+                 architecture='pixel_linear'):
         """
-        Create a simple linear model
+        Create a simple linear model.
 
-        :param normalise_input: whether the input variable should be normalised
-        :param normalise_output: whether the output variable should be normalised
-        :param batch_size: batch size for training
-        :param nr_epochs: number of iterations for training
-        :param test_interval: calculate test statistics every this many iterations
-        :param lr: learning rate
-        :param weight_decay: weight decay?
-        :param use_gpu: use GPU if present
-        :param database_path: path to optional tracking database
+        Args:
+            normalise_input: whether the input variable should be normalised
+            normalise_output: whether the output variable should be normalised
+            batch_size: batch size for training
+            nr_epochs: number of iterations for training
+            test_interval: calculate test statistics every this many iterations
+            lr: learning rate
+            weight_decay: weight decay
+            use_gpu: use GPU if present
+            database_path: path to optional tracking database
+            architecture: model variant. One of:
+                'full'         - original flatten+Linear (WARNING: huge for 100x100)
+                'pixel_linear' - per-pixel linear via Conv2d(C,1,1). Default.
+                'pixel_mlp'    - per-pixel MLP via stacked Conv2d 1x1 layers
         """
-
         self.normalise_input = normalise_input
         self.normalise_output = normalise_output
         self.normalisation_parameters = None
@@ -57,14 +63,17 @@ class LinearModel(BaseModel):
         self.lr = lr
         self.weight_decay = weight_decay
         self.use_gpu = use_gpu
-        self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs':0 }
+        self.architecture = architecture
+        self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs': 0}
         self.optim = None
+        self.loss_fn = torch.nn.MSELoss()
         self.db = ModelDatabase(database_path) if database_path else None
 
     def get_parameters(self):
         return {
             "model_id": self.get_model_id(),
             "type": "LinearModel",
+            "architecture": self.architecture,
             "input_shape": list(self.input_shape),
             "output_shape": list(self.output_shape),
             "batch_size": self.batch_size,
@@ -76,12 +85,8 @@ class LinearModel(BaseModel):
         }
 
     def save(self, to_folder):
-        """
-        Save the model to disk
-
-        :param to_folder: folder to which model files are to be saved
-        """
         os.makedirs(to_folder, exist_ok=True)
+
         weights_path = os.path.join(to_folder, "weights")
         torch.save(self.weights.state_dict(), weights_path)
 
@@ -90,7 +95,6 @@ class LinearModel(BaseModel):
             f.write(json.dumps(self.normalisation_parameters))
 
         parameters = self.get_parameters()
-
         parameters_path = os.path.join(to_folder, "parameters.json")
         with open(parameters_path, "w") as f:
             f.write(json.dumps(parameters))
@@ -102,14 +106,10 @@ class LinearModel(BaseModel):
         summary_path = os.path.join(to_folder, "summary.txt")
         with open(summary_path, "w") as f:
             f.write(self.summary())
+
         super().save(to_folder)
 
     def load(self, from_folder):
-        """
-        Load a model from disk
-
-        :param from_folder: folder from which model files should be loaded
-        """
         normalisation_path = os.path.join(from_folder, "normalisation.weights")
         with open(normalisation_path, "r") as f:
             self.normalisation_parameters = json.loads(f.read())
@@ -127,44 +127,39 @@ class LinearModel(BaseModel):
             self.weight_decay = parameters["weight_decay"]
             self.normalise_input = parameters["normalise_input"]
             self.normalise_output = parameters["normalise_output"]
+            self.architecture = parameters.get("architecture", "full")
 
         history_path = os.path.join(from_folder, "history.json")
         with open(history_path) as f:
             self.history = json.loads(f.read())
 
-        self.weights = Linear(self.input_shape,self.output_shape)
+        self.weights = build_linear_model(
+            self.architecture, self.input_shape, self.output_shape)
 
         weights_path = os.path.join(from_folder, "weights")
-        self.weights.load_state_dict(torch.load(weights_path))
+        self.weights.load_state_dict(torch.load(weights_path, weights_only=True))
         self.weights.eval()
         super().load(from_folder)
 
     def __train_epoch(self, batches):
         self.weights.train()
-
         train_loss = []
         for (low_res, high_res, labels) in batches:
-            # Encode data
             estimates = self.weights(low_res)
             loss = self.loss_fn(estimates, high_res)
-            # Backward pass
             self.optim.zero_grad()
             loss.backward()
             self.optim.step()
-            # Print batch loss
-            # print('\t partial train loss (single batch): %f' % (loss.data))
             train_loss.append(loss.detach().cpu().numpy())
-
         mean_loss = np.mean(train_loss)
         return float(mean_loss)
 
     def __test_epoch(self, batches, save_arr=None):
         test_loss = []
         self.weights.eval()
-        with torch.no_grad():  # No need to track the gradients
+        with torch.no_grad():
             ctr = 0
             for (low_res, high_res, labels) in batches:
-                # Encode data
                 estimates = self.weights(low_res)
                 loss = self.loss_fn(estimates, high_res)
                 test_loss.append(loss.detach().cpu().numpy())
@@ -176,36 +171,30 @@ class LinearModel(BaseModel):
 
     def score(self, batches, save_arr):
         self.weights.eval()
-        with torch.no_grad():  # No need to track the gradients
+        with torch.no_grad():
             ctr = 0
             for input_data in batches:
                 estimates = self.weights(input_data)
                 save_arr[ctr:ctr + self.batch_size, :, :, :] = estimates.cpu()
                 ctr += self.batch_size
 
-    def train(self, input_variables, output_variable, training_ds, testing_ds, model_path="", training_paths="", testing_paths=""):
-        """
-        Train the model (or continue training)
-
-        :param input_variables: names of th input variables in training/test datasets
-        :param output_variable: name of the output variable in training/test datasets
-        :param training_ds: an xarray dataset containing input and output 4D arrays orgainsed by (N,CHAN,Y,X)
-        :param testing_ds: an xarray dataset to use for testing only.  Format as above
-        :param model_path: path to save model to after training
-        :param training_paths: a string providing a lst of all the training data paths
-        :param testing_paths: a string providing a list of all the test data paths
-        """
+    def train(self, input_variables, output_variable, training_ds, testing_ds,
+              model_path="", training_paths="", testing_paths=""):
+        """Train from xarray datasets (legacy .nc workflow)."""
         super().__init__()
         train_ds = DSDataset(training_ds, input_variables, output_variable,
-                             normalise_in=self.normalise_input, normalise_out=self.normalise_output)
+                             normalise_in=self.normalise_input,
+                             normalise_out=self.normalise_output)
         self.set_input_spec(train_ds.get_input_spec())
         self.set_output_spec(train_ds.get_output_spec())
 
         self.normalisation_parameters = train_ds.get_normalisation_parameters()
 
         test_ds = DSDataset(testing_ds, input_variables, output_variable,
-                            normalise_in=self.normalise_input, normalise_out=self.normalise_output)
+                            normalise_in=self.normalise_input,
+                            normalise_out=self.normalise_output)
         test_ds.set_normalisation_parameters(self.normalisation_parameters)
+
         (input_chan, input_y, input_x) = train_ds.get_input_shape()
         (output_chan, output_y, output_x) = train_ds.get_output_shape()
 
@@ -213,137 +202,145 @@ class LinearModel(BaseModel):
         self.output_shape = (output_chan, output_y, output_x)
 
         if not self.weights:
-            self.weights = Linear(self.input_shape, self.output_shape)
+            self.weights = build_linear_model(
+                self.architecture, self.input_shape, self.output_shape)
 
-        train_transform = transforms.Compose([
-            transforms.ToTensor(),
-        ])
-
-        test_transform = transforms.Compose([
-            transforms.ToTensor(),
-        ])
-
+        train_transform = transforms.Compose([transforms.ToTensor()])
+        test_transform = transforms.Compose([transforms.ToTensor()])
         train_ds.transform = train_transform
         test_ds.transform = test_transform
 
-        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
-        test_loader = torch.utils.data.DataLoader(test_ds, batch_size=self.batch_size, shuffle=True)
+        train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
+        test_loader = DataLoader(test_ds, batch_size=self.batch_size, shuffle=False)
 
+        self._run_training(train_loader, test_loader, model_path)
+
+    def train_from_datasets(self, train_ds, test_ds, model_path="",
+                            training_paths="", testing_paths=""):
+        """Train from PreprocessedDataset (.pt workflow).
+
+        Args:
+            train_ds: PyTorch Dataset with get_input_spec(), get_output_spec(),
+                      get_normalisation_parameters(), get_input_shape(),
+                      get_output_shape()
+            test_ds: PyTorch Dataset (will use train_ds normalisation params)
+            model_path: folder to save the trained model
+            training_paths: string of training file paths (for logging)
+            testing_paths: string of testing file paths (for logging)
+        """
+        self.set_input_spec(train_ds.get_input_spec())
+        self.set_output_spec(train_ds.get_output_spec())
+        self.normalisation_parameters = train_ds.get_normalisation_parameters()
+        test_ds.set_normalisation_parameters(self.normalisation_parameters)
+
+        (input_chan, input_y, input_x) = train_ds.get_input_shape()
+        (output_chan, output_y, output_x) = train_ds.get_output_shape()
+
+        self.input_shape = (input_chan, input_y, input_x)
+        self.output_shape = (output_chan, output_y, output_x)
+
+        n_params = sum(p.numel() for p in self.weights.parameters()) \
+            if self.weights else '(not yet created)'
+        print(f"Training cases: {len(train_ds)}, Test cases: {len(test_ds)}")
+        print(f"Input shape: {self.input_shape}, Output shape: {self.output_shape}")
+        print(f"Architecture: {self.architecture}")
+
+        if not self.weights:
+            self.weights = build_linear_model(
+                self.architecture, self.input_shape, self.output_shape)
+
+        n_params = sum(p.numel() for p in self.weights.parameters())
+        print(f"Parameters: {n_params:,}")
+
+        train_loader = DataLoader(train_ds, batch_size=self.batch_size,
+                                  shuffle=True, num_workers=4,
+                                  pin_memory=True)
+        test_loader = DataLoader(test_ds, batch_size=self.batch_size,
+                                 shuffle=False, num_workers=4,
+                                 pin_memory=True)
+
+        self._run_training(train_loader, test_loader, model_path)
+
+    def _run_training(self, train_loader, test_loader, model_path):
+        """Shared training loop used by both train() and train_from_datasets()."""
         if self.use_gpu:
-            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+            device = torch.device("cuda") if torch.cuda.is_available() \
+                else torch.device("cpu")
         else:
             device = torch.device("cpu")
-
-        print(f'Running on device: {device}')
-
-        start = time.time()
-
-        self.loss_fn = torch.nn.MSELoss()
-
-        params_to_optimize = [
-            {'params': self.weights.parameters()}
-        ]
-
-        self.optim = torch.optim.Adam(params_to_optimize, lr=self.lr, weight_decay=self.weight_decay)
+        print(f"Running on device: {device}")
 
         self.weights.to(device)
 
+        # Prepare batches on device
         train_batches = []
         for low_res, high_res, labels in train_loader:
-            low_res = low_res.to(device)
-            high_res = high_res.to(device)
-            train_batches.append((low_res, high_res, labels))
+            train_batches.append(
+                (low_res.to(device), high_res.to(device), labels))
 
         test_batches = []
         for low_res, high_res, labels in test_loader:
-            low_res = low_res.to(device)
-            high_res = high_res.to(device)
-            test_batches.append((low_res, high_res, labels))
+            test_batches.append(
+                (low_res.to(device), high_res.to(device), labels))
 
-        train_loss = test_loss = 0.0
+        self.optim = torch.optim.Adam(
+            self.weights.parameters(), lr=self.lr,
+            weight_decay=self.weight_decay)
+
+        best_test_loss = float('inf')
+
         for epoch in range(self.nr_epochs):
             train_loss = self.__train_epoch(train_batches)
+            self.history['train_loss'].append(train_loss)
+            self.history['nr_epochs'] = epoch + 1
+
             if epoch % self.test_interval == 0:
                 test_loss = self.__test_epoch(test_batches)
-                self.history["train_loss"].append(train_loss)
-                self.history["test_loss"].append(test_loss)
-                print("%5d %.6f %.6f" % (epoch, train_loss, test_loss))
+                self.history['test_loss'].append(test_loss)
 
-        end = time.time()
-        elapsed = end - start
+                # Compute physical-space metrics using normalisation params
+                out_range = self._get_output_range_k()
+                train_rmse_k = train_loss ** 0.5 * out_range
+                test_rmse_k = test_loss ** 0.5 * out_range
 
-        self.history['nr_epochs'] = self.history['nr_epochs'] + self.nr_epochs
+                print(f"epoch {epoch:4d}  "
+                      f"train_mse={train_loss:.6f}  "
+                      f"test_mse={test_loss:.6f}  "
+                      f"train_rmse={train_rmse_k:.2f}K  "
+                      f"test_rmse={test_rmse_k:.2f}K")
 
-        print("elapsed:" + str(elapsed))
+                if test_loss < best_test_loss:
+                    best_test_loss = test_loss
+                    self.history['best_test_mse'] = float(best_test_loss)
+                    if model_path:
+                        self.save(model_path)
 
-        if self.db:
-            self.db.add_training_result(self.get_model_id(), "Linear", output_variable, input_variables, self.summary(),
-                                        model_path, training_paths, train_loss, test_paths, test_loss,
-                                        self.get_parameters(), {})
+        # Final save
         if model_path:
             self.save(model_path)
+        print(f"\nTraining complete. Best test MSE: {best_test_loss:.6f} "
+              f"(RMSE: {best_test_loss**0.5 * self._get_output_range_k():.2f}K)")
 
-        # pass over the training and test sets and calculate model metrics
-
-        metrics = {}
-        metrics["test"] = self.evaluate(test_ds, device)
-        metrics["train"] = self.evaluate(train_ds, device)
-        self.dump_metrics("Test Metrics", metrics["test"])
-        self.dump_metrics("Train Metrics", metrics["train"])
-
-        if self.db:
-            self.db.add_evaluation_result(self.get_model_id(), training_paths, testing_paths, metrics)
-
-    def apply(self, score_ds, input_variables, prediction_variable="model_output",
-                channel_dimension="model_output_channel",y_dimension="model_output_y",x_dimension="model_output_x"):
-        """
-        Apply this model to input data to produce an output estimate, added to extend score_ds
-
-        :param score_ds: an xarray dataset containing input data
-        :param input_variables: name of the input variables in the input data
-        :param prediction_variable: the name of the prediction variable
-        :param channel_dimension: the name of the channel dimension in the prediction variable
-        :param y_dimension: the name of the y dimension in the prediction variable
-        :param x_dimension: the name of the x dimension in the prediction variable
-        """
-        n = score_ds[input_variables[0]].shape[0]
-        n_dimension = score_ds[input_variables[0]].dims[0]
-        out_chan = self.output_shape[0]
-        out_y = self.output_shape[1]
-        out_x = self.output_shape[2]
-        score_arr = np.zeros(shape=(n,out_chan,out_y,out_x))
-
-        ds = DSDataset(score_ds, input_variables, input_variables[0], normalise_in=self.normalise_input)
-        ds.set_normalisation_parameters(self.normalisation_parameters)
-        val_loader = torch.utils.data.DataLoader(ds, batch_size=self.batch_size)
-
-        if self.use_gpu:
-            device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    def _get_output_range_k(self):
+        """Get output range in Kelvin for converting normalised metrics."""
+        if self.normalisation_parameters is None:
+            return 1.0
+        if isinstance(self.normalisation_parameters, list):
+            min_out = list(self.normalisation_parameters[2].values())[0]
+            max_out = list(self.normalisation_parameters[3].values())[0]
         else:
-            device = torch.device("cpu")
-
-        self.weights.to(device)
-
-        score_batches = []
-        for low_res, _, _ in val_loader:
-            low_res = low_res.to(device)
-            score_batches.append(low_res)
-
-        self.score(score_batches, save_arr=score_arr)
-        score_ds[prediction_variable] = xr.DataArray(ds.denormalise_output(score_arr),
-                dims=(n_dimension, channel_dimension, y_dimension, x_dimension))
-
+            min_out = self.normalisation_parameters.get('min_output', 0)
+            max_out = self.normalisation_parameters.get('max_output', 1)
+        return max_out - min_out
 
     def summary(self):
-        """
-        Print a summary of the model
-        """
         if self.input_shape:
-            s = "Model Summary:\n"
-            s += "\tInput shape:\n"
-            s += f"\t\tsize={self.input_shape}\n"
-            s += "\tOutput shape:\n"
-            s += f"\t\tsize={self.output_shape}\n"
+            s = f"LinearModel Summary (architecture={self.architecture}):\n"
+            s += f"\tInput shape:  {self.input_shape}\n"
+            s += f"\tOutput shape: {self.output_shape}\n"
+            if self.weights:
+                n = sum(p.numel() for p in self.weights.parameters())
+                s += f"\tParameters:   {n:,}\n"
             return s
         else:
             return "Model has not been trained"

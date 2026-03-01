@@ -620,7 +620,7 @@ class JointUNETv3:
                   f"log_var_flow={self.loss_weights.log_var_flow.item():.3f}")
 
         _ema_test = self.unet.history.get('_ema_test_mse', None)
-        _best_ema_test = self.unet.history.get('_best_test_mse', float('inf'))
+        _best_test_mse = self.unet.history.get('_best_test_mse', float('inf'))
         _ema_ratio = self.unet.history.get('_ema_ratio', None)
         _best_ema_ratio = self.unet.history.get('_best_train_test_ratio', float('inf'))
 
@@ -641,6 +641,7 @@ class JointUNETv3:
         # ================================================================
         try:
             for epoch in range(epochs_this_job):
+                epoch_start = time.time()
                 global_epoch = epochs_already_done + epoch
 
                 # Determine phase
@@ -1093,13 +1094,13 @@ class JointUNETv3:
                         h['_ema_ratio'] = float(_ema_ratio)
                         h['nr_epochs'] = global_epoch + 1
 
-                        if _ema_test < _best_ema_test:
-                            _best_ema_test = _ema_test
-                            h['_best_ema_test_mse'] = float(_best_test_mse)
+                        if test_loss < _best_test_mse:
+                            _best_test_mse = test_loss
+                            h['_best_test_mse'] = float(_best_test_mse)
                             ckpt = os.path.join(
                                 model_folder, 'checkpoint_best_test_mse')
-                            print(f"  * New best ema_test "
-                                  f"{_ema_test:.6f} -> {ckpt}")
+                            print(f"  * New best test_mse "
+                                  f"{test_loss:.6f} -> {ckpt}")
                             self._save_checkpoint(
                                 ckpt, unet_optimizer, cn_optimizer,
                                 unet_scheduler, cn_scheduler, global_epoch)
@@ -1147,6 +1148,9 @@ class JointUNETv3:
                         unet_scheduler, cn_scheduler)
                     break
 
+                epoch_sec = time.time() - epoch_start
+                print(f"  time:       {epoch_sec:.1f}s  ({3600/epoch_sec:.1f} epochs/hr)")    
+            
         except KeyboardInterrupt:
             print("Interrupted — saving emergency checkpoint...")
             emergency = os.path.join(model_folder, 'checkpoint_interrupted')
