@@ -1,7 +1,7 @@
 ============================================
 Holdout Evaluation Suite
 Model: /gws/nopw/j04/eocis_chuk/shaerdan/models/model_pB_standard_aug_zscore_rm_coldpattern_pearson_56fb1e44/checkpoint_best_test_mse
-Output: /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval
+Output: /gws/nopw/j04/eocis_chuk/shaerdan/scoring/pB_standard_pearson_v8/holdout_eval      
 ============================================
 
 >>> Evaluating VALIDATION set...
