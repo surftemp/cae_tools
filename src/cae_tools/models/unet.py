@@ -324,6 +324,35 @@ def compute_subgroup_robustness_loss(pred, target, era5_map, n_era5_bins=None,
     return robustness_loss, info
 
 
+def compute_local_variance_loss(pred, target, kernel_size=5):
+    """
+    Penalise mismatch in local spatial variance (position-tolerant texture matching).
+
+    Computes variance in sliding windows for both pred and target, then
+    penalises the difference. Says: "where the target has high texture, your
+    prediction should have high texture too" — without requiring exact pixel
+    alignment within each window.
+
+    Args:
+        pred: (B, 1, H, W)
+        target: (B, 1, H, W)
+        kernel_size: window size for local variance computation
+    """
+    padding = kernel_size // 2
+    ones = torch.ones(1, 1, kernel_size, kernel_size,
+                      device=pred.device) / (kernel_size ** 2)
+
+    # Local mean via uniform box filter
+    pred_mean = F.conv2d(pred, ones, padding=padding)
+    target_mean = F.conv2d(target, ones, padding=padding)
+
+    # Local variance = E[x²] - E[x]²
+    pred_var = F.conv2d(pred ** 2, ones, padding=padding) - pred_mean ** 2
+    target_var = F.conv2d(target ** 2, ones, padding=padding) - target_mean ** 2
+
+    return F.mse_loss(pred_var, target_var)
+
+
 class UNET(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
@@ -336,7 +365,8 @@ class UNET(BaseModel):
                  augment=False, slope_direction_channel=7, cond_dim=0,
                  lambda_spectral=0.0, spectral_every_k_epochs=10,
                  lambda_subgroup=0.0, lambda_cold=0.0,
-                 cold_threshold_k=10.0, era5_channel_idx=3, era5_cond_idx=0):
+                 cold_threshold_k=10.0, era5_channel_idx=3, era5_cond_idx=0,
+                 lambda_local_var=0.0):
         """
         Create a convolutional autoencoder general model
 
@@ -410,6 +440,7 @@ class UNET(BaseModel):
         self.cold_threshold_k = cold_threshold_k
         self.era5_channel_idx = era5_channel_idx
         self.era5_cond_idx = era5_cond_idx
+        self.lambda_local_var = lambda_local_var
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
 
@@ -454,6 +485,7 @@ class UNET(BaseModel):
             "cold_threshold_k": self.cold_threshold_k,
             "era5_channel_idx": self.era5_channel_idx,
             "era5_cond_idx": self.era5_cond_idx,
+            "lambda_local_var": self.lambda_local_var,
             "model_id": self.get_model_id()
         }
 
@@ -534,7 +566,7 @@ class UNET(BaseModel):
         is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
                             global_epoch % self.spectral_every_k_epochs == 0)
         acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
-                                  'subgroup', 'cold', 'hard_cold']}
+                                  'subgroup', 'cold', 'hard_cold', 'local_var']}
         n_batches = 0
 
         for i, (low_res, high_res, labels) in enumerate(data_loader):
@@ -574,6 +606,17 @@ class UNET(BaseModel):
                 l_spec = self.lambda_spectral * compute_spectral_loss(decoded_data, high_res)
                 combined_loss = combined_loss + l_spec
                 acc['spectral'] += l_spec.item()
+
+            # L1 loss
+            if self.lambda_l1 > 0:
+                l1_loss = (decoded_data - high_res).abs().mean()
+                combined_loss = combined_loss + self.lambda_l1 * l1_loss
+
+            # Local variance loss
+            if self.lambda_local_var > 0:
+                l_lv = self.lambda_local_var * compute_local_variance_loss(decoded_data, high_res)
+                combined_loss = combined_loss + l_lv
+                acc['local_var'] += l_lv.item()
 
             combined_loss.backward()
             torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()), max_norm=1.0)
@@ -698,7 +741,7 @@ class UNET(BaseModel):
         is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
                             global_epoch % self.spectral_every_k_epochs == 0)
         acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
-                                  'subgroup', 'cold', 'hard_cold']}
+                                  'subgroup', 'cold', 'hard_cold', 'local_var']}
         n_batches = 0
 
         for batch in data_loader:
@@ -737,6 +780,17 @@ class UNET(BaseModel):
                 l_spec = self.lambda_spectral * compute_spectral_loss(pred, targets_b)
                 combined_loss = combined_loss + l_spec
                 acc['spectral'] += l_spec.item()
+
+            # L1 loss
+            if self.lambda_l1 > 0:
+                l1_loss = (pred - targets_b).abs().mean()
+                combined_loss = combined_loss + self.lambda_l1 * l1_loss
+
+            # Local variance loss
+            if self.lambda_local_var > 0:
+                l_lv = self.lambda_local_var * compute_local_variance_loss(pred, targets_b)
+                combined_loss = combined_loss + l_lv
+                acc['local_var'] += l_lv.item()
 
             combined_loss.backward()
             torch.nn.utils.clip_grad_norm_(
@@ -1128,12 +1182,14 @@ class UNET(BaseModel):
 
         self.loss_fn = torch.nn.MSELoss()
 
-        if self.lambda_spectral > 0 or self.lambda_subgroup > 0 or self.lambda_cold > 0:
+        if self.lambda_spectral > 0 or self.lambda_subgroup > 0 or self.lambda_cold > 0 or self.lambda_local_var > 0:
             print(f'Aux losses: lambda_spectral={self.lambda_spectral}, '
                   f'spectral_every_k={self.spectral_every_k_epochs}, '
                   f'lambda_subgroup={self.lambda_subgroup}, '
                   f'lambda_cold={self.lambda_cold}, '
-                  f'cold_threshold_k={self.cold_threshold_k}')
+                  f'cold_threshold_k={self.cold_threshold_k}, '
+                  f'lambda_l1={self.lambda_l1}, '
+                  f'lambda_local_var={self.lambda_local_var}')
 
         if self.architecture == 'flow_matching':
             self.flow_model.to(device)
@@ -1274,9 +1330,10 @@ class UNET(BaseModel):
                               f"test={hard_cold_test:.4f}%")
                     print(f"  spectral:   train={train_m.get('spectral',0):.6f}  "
                           f"test={test_m.get('spectral',0):.6f}")
-                    if train_m.get('subgroup', 0) > 0 or train_m.get('cold', 0) > 0:
+                    if train_m.get('subgroup', 0) > 0 or train_m.get('cold', 0) > 0 or train_m.get('local_var', 0) > 0:
                         print(f"  aux:        subgroup={train_m.get('subgroup',0):.6f}  "
-                              f"cold={train_m.get('cold',0):.6f}")
+                              f"cold={train_m.get('cold',0):.6f}  "
+                              f"local_var={train_m.get('local_var',0):.6f}")
                     print(f"  lr:         {lr:.2e}")
 
                     # ---- History ----
@@ -1534,6 +1591,7 @@ class UNET(BaseModel):
             self.cold_threshold_k = parameters.get("cold_threshold_k", 10.0)
             self.era5_channel_idx = parameters.get("era5_channel_idx", 3)
             self.era5_cond_idx = parameters.get("era5_cond_idx", 0)
+            self.lambda_local_var = parameters.get("lambda_local_var", 0.0)
             
         use_fc = (self.bottleneck_type == 'fc')
 
