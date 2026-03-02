@@ -80,6 +80,8 @@ def detect_model_type(model_folder):
         arch = parameters.get('architecture', 'standard')
         if arch == 'flow_matching':
             return 'UNET_flow_matching'
+        elif arch == 'conditioned':
+            return 'UNET_conditioned'
         else:
             return 'UNET_standard'
     elif model_type == 'LinearModel':
@@ -142,6 +144,63 @@ def load_model(model_folder, device):
         mt.flow_model.to(device)
         mt.flow_model.eval()
 
+    elif model_type == 'UNET_conditioned':
+        from cae_tools.models.conditioned_unet import (
+            ConditionedEncoder, ConditionedDecoder)
+
+        if mt.encoder is None or mt.decoder is None:
+            # Read conditioned-specific parameters
+            parameters_path = os.path.join(model_folder, 'parameters.json')
+            with open(parameters_path) as f:
+                parameters = json.load(f)
+
+            # Conditioned models store total input channels in input_shape
+            # and cond_dim separately. spatial_ch = total - cond_dim.
+            cond_dim = parameters.get('cond_dim', 11)
+            total_in = mt.input_shape[0]
+            spatial_ch = total_in - cond_dim
+            output_chan = mt.output_shape[0]
+            base_ch = getattr(mt, 'base_channels', 64)
+            drop = getattr(mt, 'dropout_rate', 0.0)
+            out_act = getattr(mt, 'output_activation', 'none')
+            act = parameters.get('activation', 'relu')
+            nrb = parameters.get('n_res_blocks_hi', 1)
+
+            print(f"  Rebuilding conditioned encoder/decoder: "
+                  f"spatial={spatial_ch}, cond={cond_dim}, "
+                  f"out={output_chan}, base={base_ch}, "
+                  f"dropout={drop}, output_activation={out_act}, "
+                  f"activation={act}, n_res_blocks_hi={nrb}")
+
+            mt.encoder = ConditionedEncoder(
+                spatial_in_channels=spatial_ch,
+                cond_dim=cond_dim,
+                base_channels=base_ch,
+                dropout_rate=drop,
+                activation=act,
+                n_res_blocks_hi=nrb)
+            mt.decoder = ConditionedDecoder(
+                out_channels=output_chan,
+                cond_dim=cond_dim,
+                base_channels=base_ch,
+                dropout_rate=drop,
+                output_activation=out_act,
+                activation=act,
+                n_res_blocks_hi=nrb)
+
+            enc_path = os.path.join(model_folder, 'encoder.weights')
+            dec_path = os.path.join(model_folder, 'decoder.weights')
+            mt.encoder.load_state_dict(
+                torch.load(enc_path, map_location='cpu', weights_only=False))
+            mt.decoder.load_state_dict(
+                torch.load(dec_path, map_location='cpu', weights_only=False))
+            print(f"  Loaded conditioned encoder/decoder weights")
+
+        mt.encoder.to(device)
+        mt.encoder.eval()
+        mt.decoder.to(device)
+        mt.decoder.eval()
+
     else:
         # Standard/legacy UNET uses encoder + decoder
         if mt.encoder is None or mt.decoder is None:
@@ -154,22 +213,25 @@ def load_model(model_folder, device):
             base_ch = getattr(mt, 'base_channels', 64)
             drop = getattr(mt, 'dropout_rate', 0.0)
             out_act = getattr(mt, 'output_activation', 'none')
+            act = getattr(mt, 'activation', 'relu')
 
             print(f"  Rebuilding encoder/decoder: arch={arch}, "
                   f"in={input_chan}, out={output_chan}, "
                   f"base={base_ch}, dropout={drop}, "
-                  f"output_activation={out_act}")
+                  f"output_activation={out_act}, activation={act}")
 
             if arch == 'standard':
                 mt.encoder = StandardEncoder(
                     in_channels=input_chan,
                     base_channels=base_ch,
-                    dropout_rate=drop)
+                    dropout_rate=drop,
+                    activation=act)
                 mt.decoder = StandardDecoder(
                     out_channels=output_chan,
                     base_channels=base_ch,
                     dropout_rate=drop,
-                    output_activation=out_act)
+                    output_activation=out_act,
+                    activation=act)
             else:
                 raise ValueError(
                     f"Cannot rebuild encoder/decoder for "
@@ -212,16 +274,24 @@ def denormalize_output(arr, norm_params, output_activation='sigmoid'):
         return arr * range_out + min_out
 
 
-def run_inference(mt, model_type, inputs, device, batch_size=256):
+def run_inference(mt, model_type, inputs, device, batch_size=256,
+                  cond_inputs=None):
     """Run model inference in batches, return normalized predictions.
 
     Args:
         mt: loaded model (UNET or LinearModel)
-        model_type: 'UNET_standard', 'UNET_flow_matching', or 'LinearModel'
+        model_type: 'UNET_standard', 'UNET_conditioned',
+                    'UNET_flow_matching', or 'LinearModel'
         inputs: tensor of shape (N, C, H, W)
         device: torch device
         batch_size: inference batch size
+        cond_inputs: conditioning tensor (N, cond_dim), required for
+                     UNET_conditioned, ignored otherwise
     """
+    if model_type == 'UNET_conditioned' and cond_inputs is None:
+        raise ValueError(
+            "cond_inputs is required for UNET_conditioned model type")
+
     n = inputs.shape[0]
     out_shape = (n, mt.output_shape[0], mt.output_shape[1], mt.output_shape[2])
     predictions = torch.zeros(out_shape, dtype=torch.float32)
@@ -233,7 +303,11 @@ def run_inference(mt, model_type, inputs, device, batch_size=256):
             end = min(start + batch_size, n)
             batch = inputs[start:end].to(device)
 
-            if model_type == 'UNET_standard':
+            if model_type == 'UNET_conditioned':
+                cond_b = cond_inputs[start:end].to(device)
+                encoded, skips = mt.encoder(batch, cond_b)
+                pred = mt.decoder(encoded, skips, cond_b)
+            elif model_type == 'UNET_standard':
                 encoded, skips = mt.encoder(batch)
                 pred = mt.decoder(encoded, skips)
             elif model_type == 'UNET_flow_matching':
@@ -686,7 +760,18 @@ def main():
     print(f"Loading data: {args.data_pt}")
     t0 = time.time()
     data = torch.load(args.data_pt, map_location='cpu', weights_only=False)
-    inputs = data['inputs']
+
+    # Handle both standard and conditioned .pt formats
+    cond_inputs = None
+    if 'spatial_inputs' in data:
+        # Conditioned format: spatial_inputs + cond_inputs
+        inputs = data['spatial_inputs']
+        cond_inputs = data['conditioning']
+        print(f"  Conditioned format: spatial {inputs.shape}, "
+              f"cond {cond_inputs.shape}")
+    else:
+        inputs = data['inputs']
+
     targets = data['outputs']
     norm_params = data['normalisation_parameters']
     input_variables = data.get('input_variables', [])
@@ -721,7 +806,20 @@ def main():
     # ── Channel check ──
     model_in_channels = mt.input_shape[0]
     data_in_channels = inputs.shape[1]
-    if model_in_channels != data_in_channels:
+    if model_type == 'UNET_conditioned':
+        # input_shape[0] = spatial_ch + cond_dim for conditioned models
+        cond_dim = getattr(mt, 'cond_dim', 0)
+        expected_spatial = model_in_channels - cond_dim
+        if data_in_channels != expected_spatial:
+            print(f"\n*** CHANNEL MISMATCH: Conditioned model expects "
+                  f"{expected_spatial} spatial channels but data has "
+                  f"{data_in_channels}. ***")
+            sys.exit(1)
+        if cond_inputs is not None and cond_inputs.shape[1] != cond_dim:
+            print(f"\n*** COND MISMATCH: Model expects cond_dim="
+                  f"{cond_dim} but data has {cond_inputs.shape[1]}. ***")
+            sys.exit(1)
+    elif model_in_channels != data_in_channels:
         print(f"\n*** CHANNEL MISMATCH: Model expects "
               f"{model_in_channels} channels but data has "
               f"{data_in_channels}. ***")
@@ -731,7 +829,8 @@ def main():
     print(f"\nRunning inference on {inputs.shape[0]} boxes "
           f"(batch_size={args.batch_size})...")
     t0 = time.time()
-    pred_norm = run_inference(mt, model_type, inputs, device, args.batch_size)
+    pred_norm = run_inference(mt, model_type, inputs, device, args.batch_size,
+                             cond_inputs=cond_inputs)
     print(f"  Inference complete in {time.time()-t0:.1f}s")
 
     # ── Denormalize ──

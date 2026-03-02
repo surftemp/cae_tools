@@ -101,6 +101,8 @@ def main():
                         help="index of ERA5 skt in conditioning vector for conditioned arch (default: 0)")
     parser.add_argument("--lambda-local-var", type=float, default=0.0,
                         help="weight for local variance texture loss (default: 0.0 = disabled)")
+    parser.add_argument("--activation", choices=["relu", "silu"], default="relu",
+                        help="activation function for ResidualBlocks (default: relu)")
 
     args = parser.parse_args()
 
@@ -186,7 +188,8 @@ def main():
                           cold_threshold_k=args.cold_threshold_k,
                           era5_channel_idx=args.era5_channel_idx,
                           era5_cond_idx=args.era5_cond_idx,
-                          lambda_local_var=args.lambda_local_var)
+                          lambda_local_var=args.lambda_local_var,
+                          activation=args.activation)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -303,7 +306,8 @@ def main():
                       cold_threshold_k=args.cold_threshold_k,
                       era5_channel_idx=args.era5_channel_idx,
                       era5_cond_idx=args.era5_cond_idx,
-                      lambda_local_var=args.lambda_local_var)
+                      lambda_local_var=args.lambda_local_var,
+                      activation=args.activation)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

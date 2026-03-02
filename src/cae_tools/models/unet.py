@@ -366,7 +366,8 @@ class UNET(BaseModel):
                  lambda_spectral=0.0, spectral_every_k_epochs=10,
                  lambda_subgroup=0.0, lambda_cold=0.0,
                  cold_threshold_k=10.0, era5_channel_idx=3, era5_cond_idx=0,
-                 lambda_local_var=0.0):
+                 lambda_local_var=0.0, activation='relu',
+                 n_res_blocks_hi=1):
         """
         Create a convolutional autoencoder general model
 
@@ -441,6 +442,8 @@ class UNET(BaseModel):
         self.era5_channel_idx = era5_channel_idx
         self.era5_cond_idx = era5_cond_idx
         self.lambda_local_var = lambda_local_var
+        self.activation = activation
+        self.n_res_blocks_hi = n_res_blocks_hi
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
 
@@ -486,6 +489,8 @@ class UNET(BaseModel):
             "era5_channel_idx": self.era5_channel_idx,
             "era5_cond_idx": self.era5_cond_idx,
             "lambda_local_var": self.lambda_local_var,
+            "activation": self.activation,
+            "n_res_blocks_hi": self.n_res_blocks_hi,
             "model_id": self.get_model_id()
         }
 
@@ -941,12 +946,12 @@ class UNET(BaseModel):
         use_fc = (self.bottleneck_type == 'fc')
         if not self.encoder:
             if self.architecture == 'standard':
-                self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+                self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, activation=self.activation)
             else:
                 self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
         if not self.decoder:
             if self.architecture == 'standard':
-                self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation)
+                self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation, activation=self.activation)
             else:
                 self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 #         if not self.discriminator:
@@ -1135,12 +1140,14 @@ class UNET(BaseModel):
             if not self.encoder:
                 self.encoder = ConditionedEncoder(
                     spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
-                    base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+                    base_channels=self.base_channels, dropout_rate=self.dropout_rate,
+                    activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi)
             if not self.decoder:
                 self.decoder = ConditionedDecoder(
                     out_channels=output_chan, cond_dim=self.cond_dim,
                     base_channels=self.base_channels, dropout_rate=self.dropout_rate,
-                    output_activation=self.output_activation)
+                    output_activation=self.output_activation, activation=self.activation,
+                    n_res_blocks_hi=self.n_res_blocks_hi)
             n_enc = sum(p.numel() for p in self.encoder.parameters())
             n_dec = sum(p.numel() for p in self.decoder.parameters())
             print(f"Conditioned UNet: spatial_ch={spatial_ch}, cond_dim={self.cond_dim}")
@@ -1148,12 +1155,12 @@ class UNET(BaseModel):
         else:
             if not self.encoder:
                 if self.architecture == 'standard':
-                    self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+                    self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, activation=self.activation)
                 else:
                     self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
             if not self.decoder:
                 if self.architecture == 'standard':
-                    self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation)
+                    self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation, activation=self.activation)
                 else:
                     self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size, dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)
 
@@ -1170,6 +1177,8 @@ class UNET(BaseModel):
             device = torch.device("cpu")
 
         print(f'Running on device: {device}')
+        if self.activation != 'relu':
+            print(f'Activation: {self.activation}')
 
         start = time.time()
 
@@ -1592,6 +1601,8 @@ class UNET(BaseModel):
             self.era5_channel_idx = parameters.get("era5_channel_idx", 3)
             self.era5_cond_idx = parameters.get("era5_cond_idx", 0)
             self.lambda_local_var = parameters.get("lambda_local_var", 0.0)
+            self.activation = parameters.get("activation", "relu")
+            self.n_res_blocks_hi = parameters.get("n_res_blocks_hi", 1)
             
         use_fc = (self.bottleneck_type == 'fc')
 
@@ -1624,16 +1635,18 @@ class UNET(BaseModel):
             spatial_ch = input_chan - self.cond_dim
             self.encoder = ConditionedEncoder(
                 spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
-                base_channels=self.base_channels, dropout_rate=self.dropout_rate)
+                base_channels=self.base_channels, dropout_rate=self.dropout_rate,
+                activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi)
             self.decoder = ConditionedDecoder(
                 out_channels=output_chan, cond_dim=self.cond_dim,
                 base_channels=self.base_channels, dropout_rate=self.dropout_rate,
-                output_activation=self.output_activation)
+                output_activation=self.output_activation, activation=self.activation,
+                n_res_blocks_hi=self.n_res_blocks_hi)
         elif self.architecture == 'standard':
             input_chan = self.input_shape[0]
             output_chan = self.output_shape[0]
-            self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate)
-            self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation)
+            self.encoder = StandardEncoder(in_channels=input_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, activation=self.activation)
+            self.decoder = StandardDecoder(out_channels=output_chan, base_channels=self.base_channels, dropout_rate=self.dropout_rate, output_activation=self.output_activation, activation=self.activation)
         else:
             self.encoder = Encoder(self.spec.get_input_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, latent_activation=self.latent_activation)
             self.decoder = Decoder(self.spec.get_output_layers(), encoded_space_dim=self.encoded_dim_size, fc_size=self.fc_size,dropout_rate=self.dropout_rate, use_fc=use_fc, use_attention=self.use_attention, skip_mode=self.skip_mode, skip_dropout=self.skip_dropout, skip_scale=self.skip_scale, latent_activation=self.latent_activation, output_activation=self.output_activation)

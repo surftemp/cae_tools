@@ -25,24 +25,30 @@ import torch.nn.functional as F
 
 class ResidualBlock(nn.Module):
     """
-    Two 3x3 convolutions with GroupNorm and ReLU, plus a residual shortcut.
+    Two 3x3 convolutions with GroupNorm and activation, plus a residual shortcut.
     
-    GroupNorm → ReLU → Conv3x3 → GroupNorm → ReLU → Conv3x3
+    GroupNorm → Act → Conv3x3 → GroupNorm → Act → Conv3x3
     + shortcut (1x1 conv if channels change, identity otherwise)
+
+    Args:
+        activation: 'relu' or 'silu'. Default 'relu' for backward compatibility.
     """
-    def __init__(self, in_channels, out_channels, num_groups=None, dropout_rate=0.0):
+    def __init__(self, in_channels, out_channels, num_groups=None,
+                 dropout_rate=0.0, activation='relu'):
         super().__init__()
         
         # Auto-select num_groups: divisor of both in and out channels
         if num_groups is None:
             num_groups = self._select_num_groups(min(in_channels, out_channels))
+
+        act_fn = nn.SiLU if activation == 'silu' else nn.ReLU
         
         self.gn1 = nn.GroupNorm(self._select_num_groups(in_channels), in_channels)
-        self.relu1 = nn.SiLU(inplace=True)
+        self.relu1 = act_fn(inplace=True)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1, bias=False)
         
         self.gn2 = nn.GroupNorm(self._select_num_groups(out_channels), out_channels)
-        self.relu2 = nn.SiLU(inplace=True)
+        self.relu2 = act_fn(inplace=True)
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, bias=False)
         
         self.dropout = nn.Dropout2d(dropout_rate) if dropout_rate > 0 else nn.Identity()
@@ -89,26 +95,27 @@ class StandardEncoder(nn.Module):
         encoded: tensor after bridge (512 channels, H/16 × W/16)
         skips: list of tensors [skip1, skip2, skip3, skip4] before pooling
     """
-    def __init__(self, in_channels=12, base_channels=64, dropout_rate=0.0):
+    def __init__(self, in_channels=12, base_channels=64, dropout_rate=0.0,
+                 activation='relu'):
         super().__init__()
         
         ch = base_channels  # 64
         
         # Encoder stages
-        self.stage1 = ResidualBlock(in_channels, ch, dropout_rate=dropout_rate)
+        self.stage1 = ResidualBlock(in_channels, ch, dropout_rate=dropout_rate, activation=activation)
         self.pool1 = nn.MaxPool2d(2, 2)
         
-        self.stage2 = ResidualBlock(ch, ch * 2, dropout_rate=dropout_rate)
+        self.stage2 = ResidualBlock(ch, ch * 2, dropout_rate=dropout_rate, activation=activation)
         self.pool2 = nn.MaxPool2d(2, 2)
         
-        self.stage3 = ResidualBlock(ch * 2, ch * 4, dropout_rate=dropout_rate)
+        self.stage3 = ResidualBlock(ch * 2, ch * 4, dropout_rate=dropout_rate, activation=activation)
         self.pool3 = nn.MaxPool2d(2, 2)
         
-        self.stage4 = ResidualBlock(ch * 4, ch * 8, dropout_rate=dropout_rate)
+        self.stage4 = ResidualBlock(ch * 4, ch * 8, dropout_rate=dropout_rate, activation=activation)
         self.pool4 = nn.MaxPool2d(2, 2)
         
         # Bridge (bottleneck) - convolutional, no FC
-        self.bridge = ResidualBlock(ch * 8, ch * 8, dropout_rate=dropout_rate)
+        self.bridge = ResidualBlock(ch * 8, ch * 8, dropout_rate=dropout_rate, activation=activation)
     
     def forward(self, x):
         # Stage 1: (B, 12, 100, 100) → (B, 64, 100, 100)
@@ -149,7 +156,7 @@ class StandardDecoder(nn.Module):
         output_activation: 'none', 'sigmoid', or 'tanh'
     """
     def __init__(self, out_channels=1, base_channels=64, dropout_rate=0.0,
-                 output_activation='none'):
+                 output_activation='none', activation='relu'):
         super().__init__()
         self.output_activation = output_activation
         
@@ -160,19 +167,19 @@ class StandardDecoder(nn.Module):
         
         # Up1: bridge(512) upsample, concat skip4(512) → 1024 → 256
         self.up_conv1 = nn.Conv2d(ch * 8, ch * 8, kernel_size=1)  # pre-upsample channel adjustment
-        self.dec_block1 = ResidualBlock(ch * 8 + ch * 8, ch * 4, dropout_rate=dropout_rate)
+        self.dec_block1 = ResidualBlock(ch * 8 + ch * 8, ch * 4, dropout_rate=dropout_rate, activation=activation)
         
         # Up2: 256 upsample, concat skip3(256) → 512 → 128
         self.up_conv2 = nn.Conv2d(ch * 4, ch * 4, kernel_size=1)
-        self.dec_block2 = ResidualBlock(ch * 4 + ch * 4, ch * 2, dropout_rate=dropout_rate)
+        self.dec_block2 = ResidualBlock(ch * 4 + ch * 4, ch * 2, dropout_rate=dropout_rate, activation=activation)
         
         # Up3: 128 upsample, concat skip2(128) → 256 → 64
         self.up_conv3 = nn.Conv2d(ch * 2, ch * 2, kernel_size=1)
-        self.dec_block3 = ResidualBlock(ch * 2 + ch * 2, ch, dropout_rate=dropout_rate)
+        self.dec_block3 = ResidualBlock(ch * 2 + ch * 2, ch, dropout_rate=dropout_rate, activation=activation)
         
         # Up4: 64 upsample, concat skip1(64) → 128 → 64
         self.up_conv4 = nn.Conv2d(ch, ch, kernel_size=1)
-        self.dec_block4 = ResidualBlock(ch + ch, ch, dropout_rate=dropout_rate)
+        self.dec_block4 = ResidualBlock(ch + ch, ch, dropout_rate=dropout_rate, activation=activation)
         
         # Final 1×1 conv to output channels
         self.final_conv = nn.Conv2d(ch, out_channels, kernel_size=1)
