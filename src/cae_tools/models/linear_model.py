@@ -33,7 +33,7 @@ class LinearModel(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10,
                  lr=0.001, weight_decay=1e-5, use_gpu=True, database_path=None,
-                 architecture='pixel_linear'):
+                 architecture='pixel_linear', patience=None):
         """
         Create a simple linear model.
 
@@ -65,6 +65,7 @@ class LinearModel(BaseModel):
         self.weight_decay = weight_decay
         self.use_gpu = use_gpu
         self.architecture = architecture
+        self.patience = patience
         self.history = {'train_loss': [], 'test_loss': [], 'nr_epochs': 0}
         self.optim = None
         self.loss_fn = torch.nn.MSELoss()
@@ -271,13 +272,15 @@ class LinearModel(BaseModel):
         self._run_training(train_loader, test_loader, model_path)
 
     def _run_training(self, train_loader, test_loader, model_path):
-            """Shared training loop used by both train() and train_from_datasets()."""
+            """Shared training loop with optional early stopping on test MAE."""
             if self.use_gpu:
                 device = torch.device("cuda") if torch.cuda.is_available() \
                     else torch.device("cpu")
             else:
                 device = torch.device("cpu")
             print(f"Running on device: {device}")
+            if self.patience:
+                print(f"Early stopping patience: {self.patience} epochs")
     
             self.weights.to(device)
     
@@ -285,7 +288,9 @@ class LinearModel(BaseModel):
                 self.weights.parameters(), lr=self.lr,
                 weight_decay=self.weight_decay)
     
-            best_test_loss = float('inf')
+            best_test_mae = float('inf')
+            best_epoch = 0
+            epochs_since_best = 0
     
             for epoch in range(self.nr_epochs):
                 train_loss, train_mae = self.__train_epoch(train_loader, device)
@@ -298,6 +303,19 @@ class LinearModel(BaseModel):
     
                     out_range = self._get_output_range_k()
     
+                    improved = ""
+                    if test_mae < best_test_mae:
+                        best_test_mae = test_mae
+                        best_epoch = epoch
+                        epochs_since_best = 0
+                        self.history['best_test_mae'] = float(best_test_mae)
+                        self.history['best_epoch'] = best_epoch
+                        if model_path:
+                            self.save(model_path)
+                        improved = " ★ best"
+                    else:
+                        epochs_since_best += self.test_interval
+
                     print(f"epoch {epoch:4d}  "
                           f"train_mse={train_loss:.6f}  "
                           f"test_mse={test_loss:.6f}")
@@ -311,18 +329,17 @@ class LinearModel(BaseModel):
                           f"train_rmse={train_loss**0.5*out_range:.2f}K  "
                           f"test_rmse={test_loss**0.5*out_range:.2f}K  "
                           f"train_mae={train_mae*out_range:.2f}K  "
-                          f"test_mae={test_mae*out_range:.2f}K")
-    
-                    if test_loss < best_test_loss:
-                        best_test_loss = test_loss
-                        self.history['best_test_mse'] = float(best_test_loss)
-                        if model_path:
-                            self.save(model_path)
-    
-            if model_path:
-                self.save(model_path)
-            print(f"\nTraining complete. Best test MSE: {best_test_loss:.6f} "
-                  f"(RMSE: {best_test_loss**0.5 * self._get_output_range_k():.2f}K)")
+                          f"test_mae={test_mae*out_range:.2f}K"
+                          f"{improved}")
+
+                    if self.patience and epochs_since_best >= self.patience:
+                        print(f"\n  Early stopping: no improvement for "
+                              f"{self.patience} epochs")
+                        break
+
+            print(f"\nTraining complete. Best test MAE: "
+                  f"{best_test_mae*self._get_output_range_k():.2f}K "
+                  f"at epoch {best_epoch}")
 
     def _get_output_range_k(self):
         """Get output range in Kelvin for converting normalised metrics."""

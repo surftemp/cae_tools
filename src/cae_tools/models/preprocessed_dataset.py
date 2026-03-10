@@ -38,12 +38,31 @@ class PreprocessedDataset(torch.utils.data.Dataset):
         print(f"Loading preprocessed data from {pt_path}...")
         data = torch.load(pt_path)
         
-        self.inputs = data['inputs']
+        # Auto-detect format: conditioned (spatial_inputs + conditioning)
+        # or legacy (inputs). For conditioned format, broadcast conditioning
+        # scalars to spatial dimensions and concatenate to produce a single
+        # (N, spatial_ch + cond_ch, H, W) inputs tensor.
+        if 'spatial_inputs' in data and 'conditioning' in data:
+            spatial = data['spatial_inputs']   # (N, C_s, H, W)
+            cond = data['conditioning']        # (N, C_c)
+            H, W = spatial.shape[2], spatial.shape[3]
+            # Broadcast conditioning: (N, C_c) -> (N, C_c, H, W)
+            cond_spatial = cond.unsqueeze(-1).unsqueeze(-1).expand(
+                -1, -1, H, W)
+            self.inputs = torch.cat([spatial, cond_spatial], dim=1)
+            self.input_variables = (data.get('spatial_variables', []) +
+                                    data.get('cond_variables', []))
+            self.output_variable = data.get('output_variable', 'ST_slices')
+            print(f"  Conditioned format detected: {spatial.shape[1]} spatial + "
+                  f"{cond.shape[1]} conditioning -> {self.inputs.shape[1]} channels")
+        else:
+            self.inputs = data['inputs']
+            self.input_variables = data['input_variables']
+            self.output_variable = data['output_variable']
+        
         self.outputs = data['outputs']
-        self.input_variables = data['input_variables']
-        self.output_variable = data['output_variable']
         self.n_samples = data['n_samples']
-        self.normalized = data['normalized']
+        self.normalized = data.get('normalized', True)
         
         # For compatibility with DSDataset
         self.transform = None

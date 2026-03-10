@@ -103,6 +103,9 @@ def main():
                         help="weight for local variance texture loss (default: 0.0 = disabled)")
     parser.add_argument("--activation", choices=["relu", "silu"], default="relu",
                         help="activation function for ResidualBlocks (default: relu)")
+    parser.add_argument("--n-res-blocks-hi", type=int, choices=[1, 2], default=1,
+                        help="number of ResidualBlocks at high-res encoder/decoder stages "
+                             "for conditioned arch (default: 1, use 2 for texture capacity)")
 
     args = parser.parse_args()
 
@@ -189,7 +192,8 @@ def main():
                           era5_channel_idx=args.era5_channel_idx,
                           era5_cond_idx=args.era5_cond_idx,
                           lambda_local_var=args.lambda_local_var,
-                          activation=args.activation)
+                          activation=args.activation,
+                          n_res_blocks_hi=args.n_res_blocks_hi)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:
@@ -307,7 +311,8 @@ def main():
                       era5_channel_idx=args.era5_channel_idx,
                       era5_cond_idx=args.era5_cond_idx,
                       lambda_local_var=args.lambda_local_var,
-                      activation=args.activation)
+                      activation=args.activation,
+                      n_res_blocks_hi=args.n_res_blocks_hi)
         elif args.method == "linear":
             mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
         else:

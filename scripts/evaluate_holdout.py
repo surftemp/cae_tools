@@ -384,7 +384,7 @@ def compute_metrics(pred_k, target_k):
     pct_cold = float(100 * n_cold / n_pixels)
 
     n_boxes = pred_k.shape[0]
-    box_means = pred_k.reshape(n_boxes, -1).mean(axis=1)
+    box_means = np.nanmean(pred_k.reshape(n_boxes, -1), axis=1)
     n_cold_boxes = int(np.sum(box_means < 280))
 
     return {
@@ -438,25 +438,25 @@ def compute_per_box_metrics(pred_k, target_k):
     tgt_flat = target_k[:, 0, :, :].reshape(N, -1)
     err = pred_flat - tgt_flat
 
-    rmse = np.sqrt(np.mean(err ** 2, axis=1))
-    mae = np.mean(np.abs(err), axis=1)
-    me = np.mean(err, axis=1)
-    median = np.median(err, axis=1)
-    mean_pred = np.mean(pred_flat, axis=1)
-    mean_target = np.mean(tgt_flat, axis=1)
+    rmse = np.sqrt(np.nanmean(err ** 2, axis=1))
+    mae = np.nanmean(np.abs(err), axis=1)
+    me = np.nanmean(err, axis=1)
+    median = np.nanmedian(err, axis=1)
+    mean_pred = np.nanmean(pred_flat, axis=1)
+    mean_target = np.nanmean(tgt_flat, axis=1)
 
     # Per-box Pearson R: correlation between predicted and target pixel
     # values within each box.  For a box where pred or target is spatially
     # constant (zero variance), Pearson R is undefined — we set it to 0.0.
-    pred_centered = pred_flat - mean_pred[:, np.newaxis]
-    tgt_centered = tgt_flat - mean_target[:, np.newaxis]
+    pred_centered = pred_flat - np.nanmean(pred_flat, axis=1, keepdims=True)
+    tgt_centered = tgt_flat - np.nanmean(tgt_flat, axis=1, keepdims=True)
 
     # Numerator: sum of products of centered values (per box)
-    cov_xy = np.mean(pred_centered * tgt_centered, axis=1)
+    cov_xy = np.nanmean(pred_centered * tgt_centered, axis=1)
 
     # Denominator: product of standard deviations
-    std_pred = np.std(pred_flat, axis=1)
-    std_tgt = np.std(tgt_flat, axis=1)
+    std_pred = np.nanstd(pred_flat, axis=1)
+    std_tgt = np.nanstd(tgt_flat, axis=1)
     denom = std_pred * std_tgt
 
     # Where either field is constant, correlation is undefined → 0.0
@@ -765,11 +765,15 @@ def main():
     cond_inputs = None
     if 'spatial_inputs' in data:
         # Conditioned format: spatial_inputs + cond_inputs
-        inputs = data['spatial_inputs']
+        spatial_inputs = data['spatial_inputs']
         cond_inputs = data['conditioning']
-        print(f"  Conditioned format: spatial {inputs.shape}, "
+        print(f"  Conditioned format: spatial {spatial_inputs.shape}, "
               f"cond {cond_inputs.shape}")
+        # For conditioned UNet, keep them separate
+        inputs = spatial_inputs
     else:
+        spatial_inputs = None
+        cond_inputs = None
         inputs = data['inputs']
 
     targets = data['outputs']
@@ -807,7 +811,6 @@ def main():
     model_in_channels = mt.input_shape[0]
     data_in_channels = inputs.shape[1]
     if model_type == 'UNET_conditioned':
-        # input_shape[0] = spatial_ch + cond_dim for conditioned models
         cond_dim = getattr(mt, 'cond_dim', 0)
         expected_spatial = model_in_channels - cond_dim
         if data_in_channels != expected_spatial:
@@ -819,11 +822,21 @@ def main():
             print(f"\n*** COND MISMATCH: Model expects cond_dim="
                   f"{cond_dim} but data has {cond_inputs.shape[1]}. ***")
             sys.exit(1)
-    elif model_in_channels != data_in_channels:
-        print(f"\n*** CHANNEL MISMATCH: Model expects "
-              f"{model_in_channels} channels but data has "
-              f"{data_in_channels}. ***")
-        sys.exit(1)
+    else:
+        # Non-conditioned model (LinearModel, standard UNet) with conditioned data:
+        # broadcast conditioning to spatial and concatenate
+        if cond_inputs is not None and model_in_channels != data_in_channels:
+            H, W = inputs.shape[2], inputs.shape[3]
+            cond_broadcast = cond_inputs.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, H, W)
+            inputs = torch.cat([inputs, cond_broadcast], dim=1)
+            cond_inputs = None  # already merged into inputs
+            print(f"  Broadcast conditioning -> {inputs.shape[1]} flat channels")
+            data_in_channels = inputs.shape[1]
+        if model_in_channels != data_in_channels:
+            print(f"\n*** CHANNEL MISMATCH: Model expects "
+                  f"{model_in_channels} channels but data has "
+                  f"{data_in_channels}. ***")
+            sys.exit(1)
 
     # ── Inference ──
     print(f"\nRunning inference on {inputs.shape[0]} boxes "
@@ -841,6 +854,30 @@ def main():
                                   output_activation)
     print(f"  Prediction range: [{pred_k.min():.1f}K, {pred_k.max():.1f}K]")
     print(f"  Target range:     [{target_k.min():.1f}K, {target_k.max():.1f}K]")
+
+    # ── Filter non-UK pixels (land_cover == 0) ──
+    # Land cover class 0 = France, Ireland, Channel Islands — outside UKCEH
+    # classification boundary. These are valid land but not UK territory.
+    spatial_vars = data.get('spatial_variables', input_variables)
+    if 'land_cover' in spatial_vars:
+        lc_idx = spatial_vars.index('land_cover')
+        if 'spatial_inputs' in data:
+            lc_norm = data['spatial_inputs'][:, lc_idx].numpy()
+        else:
+            lc_norm = data['inputs'][:, lc_idx].numpy()
+        lc_mn = norm_params['min_inputs']['land_cover']
+        lc_mx = norm_params['max_inputs']['land_cover']
+        lc_phys = lc_norm * (lc_mx - lc_mn) + lc_mn
+        non_uk = (np.round(lc_phys).astype(int) == 0)
+        # non_uk shape: (N, 100, 100), pred_k shape: (N, 1, 100, 100)
+        non_uk_4d = non_uk[:, np.newaxis, :, :]
+        n_non_uk = int(non_uk_4d.sum())
+        n_total = int(np.prod(pred_k.shape))
+        print(f"\n  Non-UK pixels (land_cover=0): {n_non_uk:,} / {n_total:,} "
+              f"({100*n_non_uk/n_total:.1f}%)")
+        pred_k = np.where(non_uk_4d, np.nan, pred_k)
+        target_k = np.where(non_uk_4d, np.nan, target_k)
+        print(f"  Set to NaN — excluded from all metrics")
 
     # ── Global metrics ──
     print("\nComputing global metrics...")

@@ -367,7 +367,8 @@ class UNET(BaseModel):
                  lambda_subgroup=0.0, lambda_cold=0.0,
                  cold_threshold_k=10.0, era5_channel_idx=3, era5_cond_idx=0,
                  lambda_local_var=0.0, activation='relu',
-                 n_res_blocks_hi=1):
+                 n_res_blocks_hi=1,
+                 cond_variables=None):
         """
         Create a convolutional autoencoder general model
 
@@ -444,6 +445,7 @@ class UNET(BaseModel):
         self.lambda_local_var = lambda_local_var
         self.activation = activation
         self.n_res_blocks_hi = n_res_blocks_hi
+        self.cond_variables = cond_variables or []
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
 
@@ -491,8 +493,23 @@ class UNET(BaseModel):
             "lambda_local_var": self.lambda_local_var,
             "activation": self.activation,
             "n_res_blocks_hi": self.n_res_blocks_hi,
+            "cond_variables": self.cond_variables,
             "model_id": self.get_model_id()
         }
+
+    def get_input_variable_names(self):
+        """Return input variable names needed by apply_cae.
+
+        For conditioned models, returns spatial_vars + cond_vars so that
+        apply_cae stacks all channels (broadcasting scalars to spatial dims).
+        split_for_scoring then splits the last cond_dim channels back out.
+        """
+        base_names = super().get_input_variable_names()
+        if self.architecture == 'conditioned' and self.cond_variables:
+            if base_names is None:
+                return None
+            return base_names + self.cond_variables
+        return base_names
 
     def compute_gradient_penalty(self, D, real_samples, fake_samples):
         """Calculates the gradient penalty loss for WGAN GP"""
@@ -1136,6 +1153,10 @@ class UNET(BaseModel):
             # get_input_shape() returns spatial channels only for conditioned datasets.
             # Store total (spatial + cond) as input_shape so apply_cae and load() work.
             spatial_ch = input_chan  # from get_input_shape() = spatial only
+            
+            if not self.cond_variables and hasattr(train_ds, 'get_cond_variables'):
+                self.cond_variables = train_ds.get_cond_variables() 
+                
             self.input_shape = (spatial_ch + self.cond_dim, input_y, input_x)
             if not self.encoder:
                 self.encoder = ConditionedEncoder(
@@ -1603,6 +1624,7 @@ class UNET(BaseModel):
             self.lambda_local_var = parameters.get("lambda_local_var", 0.0)
             self.activation = parameters.get("activation", "relu")
             self.n_res_blocks_hi = parameters.get("n_res_blocks_hi", 1)
+            self.cond_variables = parameters.get("cond_variables", [])
             
         use_fc = (self.bottleneck_type == 'fc')
 

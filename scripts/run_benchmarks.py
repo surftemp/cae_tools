@@ -52,10 +52,10 @@ except ImportError:
     from cae_tools.models.linear_model import LinearModel
 
 
-ERA5_CHANNEL_IDX = 3
+ERA5_CHANNEL_IDX = None
 
 
-def compute_era5_baseline(test_ds, norm_params):
+def compute_era5_baseline(test_ds, norm_params, era5_channel_idx):
     """Compute ERA5-only baseline: use ERA5 channel as prediction.
 
     ERA5 is normalised with ERA5 min/max. Output is normalised with
@@ -84,7 +84,7 @@ def compute_era5_baseline(test_ds, norm_params):
     loader = DataLoader(test_ds, batch_size=64, shuffle=False)
     for inputs, targets, _ in loader:
         # Denormalise to Kelvin
-        era5_k = inputs[:, ERA5_CHANNEL_IDX:ERA5_CHANNEL_IDX + 1, :, :] * era5_range + era5_min
+        era5_k = inputs[:, era5_channel_idx:era5_channel_idx + 1, :, :] * era5_range + era5_min
         lst_k = targets * out_range + min_out
 
         diff = era5_k - lst_k
@@ -138,16 +138,17 @@ def compute_model_test_metrics(model_weights, test_ds, norm_params, device):
 
 
 def train_benchmark(architecture, train_ds, test_ds, output_dir,
-                    nr_epochs, batch_size, lr):
-    """Train one benchmark model and save it."""
+                    max_epochs, batch_size, lr, patience=50):
+    """Train one benchmark model with early stopping."""
     model_dir = os.path.join(output_dir, f'benchmark_{architecture}')
 
     mt = LinearModel(
         batch_size=batch_size,
-        nr_epochs=nr_epochs,
+        nr_epochs=max_epochs,
         lr=lr,
         architecture=architecture,
         test_interval=10,
+        patience=patience,
     )
 
     mt.train_from_datasets(
@@ -157,7 +158,9 @@ def train_benchmark(architecture, train_ds, test_ds, output_dir,
         testing_paths="benchmark",
     )
 
-    return mt, model_dir
+    best_epoch = mt.history.get('best_epoch', -1)
+    best_mae_k = mt.history.get('best_test_mae', 0) * mt._get_output_range_k()
+    return mt, model_dir, best_epoch, best_mae_k
 
 
 def main():
@@ -170,12 +173,22 @@ def main():
     parser.add_argument("--output-dir", required=True,
                         help="Directory to save benchmark models")
     parser.add_argument("--nr-epochs", type=int, default=500,
-                        help="Training epochs (default 500)")
+                        help="Training epochs for all models unless overridden (default 500)")
+    parser.add_argument("--nr-epochs-linear", type=int, default=None,
+                        help="Training epochs for pixel-linear (default: --nr-epochs)")
+    parser.add_argument("--nr-epochs-mlp", type=int, default=None,
+                        help="Training epochs for pixel-MLP (default: --nr-epochs)")
     parser.add_argument("--batch-size", type=int, default=64,
                         help="Batch size (default 64)")
     parser.add_argument("--lr", type=float, default=0.001,
                         help="Learning rate (default 0.001)")
+    parser.add_argument("--patience", type=int, default=50,
+                        help="Early stopping patience in epochs: stop if test MAE "
+                             "doesn't improve for this many epochs (default 50)")
     args = parser.parse_args()
+
+    epochs_linear = args.nr_epochs_linear or args.nr_epochs
+    epochs_mlp = args.nr_epochs_mlp or args.nr_epochs
 
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -190,13 +203,20 @@ def main():
     test_ds.set_normalisation_parameters(train_ds.get_normalisation_parameters())
     norm_params = train_ds.get_normalisation_parameters()
 
+    # Auto-detect ERA5 skt channel index
+    input_vars = train_ds.input_variables
+    if 'era5_skt' in input_vars:
+        ERA5_CHANNEL_IDX = input_vars.index('era5_skt')
+    else:
+        ERA5_CHANNEL_IDX = 3  # fallback for legacy
+    print(f"ERA5 skt channel index: {ERA5_CHANNEL_IDX} ({input_vars[ERA5_CHANNEL_IDX]})")
     results = {}
 
     # ---- Benchmark 1: ERA5 baseline ----
     print("\n" + "=" * 60)
     print("Benchmark 1: ERA5-only (no model, raw ERA5 broadcast)")
     print("=" * 60)
-    era5_metrics = compute_era5_baseline(test_ds, norm_params)
+    era5_metrics = compute_era5_baseline(test_ds, norm_params, ERA5_CHANNEL_IDX)
     results['era5_only'] = era5_metrics
     print(f"  RMSE: {era5_metrics['rmse_kelvin']:.2f}K")
     print(f"  MAE:  {era5_metrics['mae_kelvin']:.2f}K")
@@ -205,9 +225,9 @@ def main():
     print("\n" + "=" * 60)
     print("Benchmark 2: Pixel-linear (Conv2d 11→1, kernel_size=1)")
     print("=" * 60)
-    mt_linear, dir_linear = train_benchmark(
+    mt_linear, dir_linear, best_ep_lin, best_mae_lin = train_benchmark(
         'pixel_linear', train_ds, test_ds, args.output_dir,
-        args.nr_epochs, args.batch_size, args.lr)
+        epochs_linear, args.batch_size, args.lr, patience=args.patience)
 
     device = torch.device("cuda") if torch.cuda.is_available() \
         else torch.device("cpu")
@@ -222,9 +242,9 @@ def main():
     print("\n" + "=" * 60)
     print("Benchmark 3: Pixel-MLP (Conv2d 11→64→32→1, kernel_size=1)")
     print("=" * 60)
-    mt_mlp, dir_mlp = train_benchmark(
+    mt_mlp, dir_mlp, best_ep_mlp, best_mae_mlp = train_benchmark(
         'pixel_mlp', train_ds, test_ds, args.output_dir,
-        args.nr_epochs, args.batch_size, args.lr)
+        epochs_mlp, args.batch_size, args.lr, patience=args.patience)
 
     mlp_metrics = compute_model_test_metrics(
         mt_mlp.weights, test_ds, norm_params, device)
@@ -237,18 +257,18 @@ def main():
     print("\n" + "=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print(f"{'Model':<20} {'RMSE (K)':<12} {'MAE (K)':<12} {'Parameters':<12}")
-    print("-" * 56)
+    print(f"{'Model':<20} {'RMSE (K)':<12} {'MAE (K)':<12} {'Parameters':<12} {'Best Ep':<8}")
+    print("-" * 64)
     print(f"{'ERA5-only':<20} {era5_metrics['rmse_kelvin']:<12.2f} "
-          f"{era5_metrics['mae_kelvin']:<12.2f} {'0':>12}")
+          f"{era5_metrics['mae_kelvin']:<12.2f} {'0':>12} {'-':>8}")
 
     n_linear = sum(p.numel() for p in mt_linear.weights.parameters())
     print(f"{'Pixel-linear':<20} {linear_metrics['rmse_kelvin']:<12.2f} "
-          f"{linear_metrics['mae_kelvin']:<12.2f} {n_linear:>12,}")
+          f"{linear_metrics['mae_kelvin']:<12.2f} {n_linear:>12,} {best_ep_lin:>8}")
 
     n_mlp = sum(p.numel() for p in mt_mlp.weights.parameters())
     print(f"{'Pixel-MLP':<20} {mlp_metrics['rmse_kelvin']:<12.2f} "
-          f"{mlp_metrics['mae_kelvin']:<12.2f} {n_mlp:>12,}")
+          f"{mlp_metrics['mae_kelvin']:<12.2f} {n_mlp:>12,} {best_ep_mlp:>8}")
 
     print(f"\n{'UNet (for reference)':<20} {'~2.0-2.5':<12} {'~1.8-2.0':<12} "
           f"{'~14,000,000':>12}")
@@ -263,6 +283,17 @@ def main():
 
     # Save summary
     results_path = os.path.join(args.output_dir, 'benchmark_results.json')
+    results['config'] = {
+        'max_epochs_linear': epochs_linear,
+        'max_epochs_mlp': epochs_mlp,
+        'patience': args.patience,
+        'batch_size': args.batch_size,
+        'lr': args.lr,
+        'best_epoch_linear': best_ep_lin,
+        'best_mae_linear_k': best_mae_lin,
+        'best_epoch_mlp': best_ep_mlp,
+        'best_mae_mlp_k': best_mae_mlp,
+    }
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"\nResults saved to {results_path}")
