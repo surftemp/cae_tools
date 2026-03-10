@@ -175,10 +175,10 @@ class ConditionedPreprocessedDataset(torch.utils.data.Dataset):
                 for var in self.spatial_variables]
 
     def get_output_spec(self):
-        return [{
+        return {
             "name": self.output_variable,
             "shape": list(self.outputs.shape[1:])
-        }]
+        }
 
     def get_spatial_variables(self):
         return self.spatial_variables

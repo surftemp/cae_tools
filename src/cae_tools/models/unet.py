@@ -353,6 +353,158 @@ def compute_local_variance_loss(pred, target, kernel_size=5):
     return F.mse_loss(pred_var, target_var)
 
 
+# ── Multi-scale Pearson loss ──────────────────────────────────────────────
+
+def compute_multiscale_pearson_loss(pred, target, scales=(1, 2, 4, 8)):
+    """
+    Pearson correlation loss computed at multiple spatial scales.
+
+    At each scale, avg_pool2d reduces spatial resolution, then Pearson R is
+    computed. Finer scales are weighted higher (weight = 1/scale, normalised)
+    so the model is forced to match patterns at neighbourhood and parcel
+    level, not just large-scale gradients.
+
+    Returns weighted mean of (1 - R) across scales.
+
+    Args:
+        pred: (B, 1, H, W)
+        target: (B, 1, H, W)
+        scales: tuple of pool sizes (1 = full resolution)
+    """
+    weights = [1.0 / s for s in scales]
+    total_weight = sum(weights)
+
+    loss = torch.tensor(0.0, device=pred.device)
+
+    for scale, w in zip(scales, weights):
+        if scale == 1:
+            p, t = pred, target
+        else:
+            p = F.avg_pool2d(pred, kernel_size=scale)
+            t = F.avg_pool2d(target, kernel_size=scale)
+
+        # Pearson R over spatial dims (B, 1, H', W') → scalar
+        p_flat = p.reshape(p.shape[0], -1)  # (B, N)
+        t_flat = t.reshape(t.shape[0], -1)
+
+        p_mean = p_flat.mean(dim=1, keepdim=True)
+        t_mean = t_flat.mean(dim=1, keepdim=True)
+
+        p_c = p_flat - p_mean
+        t_c = t_flat - t_mean
+
+        cov = (p_c * t_c).sum(dim=1)
+        std_p = (p_c ** 2).sum(dim=1).sqrt().clamp(min=1e-8)
+        std_t = (t_c ** 2).sum(dim=1).sqrt().clamp(min=1e-8)
+
+        r = cov / (std_p * std_t)
+        scale_loss = (1 - r).mean()
+        loss = loss + (w / total_weight) * scale_loss
+
+    return loss
+
+
+# ── Gradient (Sobel) loss ─────────────────────────────────────────────────
+
+def _get_sobel_kernels(device):
+    """Return Sobel kernels for horizontal and vertical gradients."""
+    sobel_x = torch.tensor([[-1, 0, 1],
+                             [-2, 0, 2],
+                             [-1, 0, 1]], dtype=torch.float32, device=device)
+    sobel_y = torch.tensor([[-1, -2, -1],
+                             [ 0,  0,  0],
+                             [ 1,  2,  1]], dtype=torch.float32, device=device)
+    # Shape: (1, 1, 3, 3) for single-channel conv
+    return sobel_x.reshape(1, 1, 3, 3), sobel_y.reshape(1, 1, 3, 3)
+
+
+def compute_gradient_loss(pred, target):
+    """
+    Gradient loss using Sobel filters.
+
+    Extracts horizontal and vertical gradients from both pred and target,
+    then computes L1 loss between gradient maps. Directly penalises blurred
+    edges at land cover boundaries, urban transitions, elevation breaks.
+
+    Args:
+        pred: (B, 1, H, W)
+        target: (B, 1, H, W)
+    """
+    sobel_x, sobel_y = _get_sobel_kernels(pred.device)
+
+    pred_gx = F.conv2d(pred, sobel_x, padding=1)
+    pred_gy = F.conv2d(pred, sobel_y, padding=1)
+    target_gx = F.conv2d(target, sobel_x, padding=1)
+    target_gy = F.conv2d(target, sobel_y, padding=1)
+
+    return F.l1_loss(pred_gx, target_gx) + F.l1_loss(pred_gy, target_gy)
+
+
+# ── Patch-wise SSIM loss ─────────────────────────────────────────────────
+
+def _gaussian_kernel_1d(size, sigma, device):
+    """Create 1D Gaussian kernel."""
+    coords = torch.arange(size, dtype=torch.float32, device=device)
+    coords -= size // 2
+    g = torch.exp(-coords ** 2 / (2 * sigma ** 2))
+    return g / g.sum()
+
+
+def _gaussian_kernel_2d(size, sigma, device):
+    """Create 2D Gaussian kernel as outer product of two 1D kernels."""
+    k1d = _gaussian_kernel_1d(size, sigma, device)
+    k2d = k1d.unsqueeze(1) * k1d.unsqueeze(0)
+    return k2d.reshape(1, 1, size, size)
+
+
+def compute_ssim_loss(pred, target, kernel_size=11, sigma=1.5,
+                      data_range=None):
+    """
+    Patch-wise SSIM loss: 1 - mean(SSIM map).
+
+    Computes SSIM in local Gaussian-weighted windows. Captures local
+    luminance + contrast + structure. Supersedes local variance loss for
+    fine-scale pattern matching.
+
+    C1/C2 constants are scaled by data_range for output_activation='none'
+    (unbounded output). If data_range is None, it is estimated from the
+    target batch.
+
+    Args:
+        pred: (B, 1, H, W)
+        target: (B, 1, H, W)
+        kernel_size: Gaussian window size (default 11)
+        sigma: Gaussian sigma (default 1.5)
+        data_range: dynamic range of the data. If None, uses
+            max(target) - min(target) from the batch.
+    """
+    if data_range is None:
+        data_range = (target.max() - target.min()).clamp(min=1e-8)
+
+    C1 = (0.01 * data_range) ** 2
+    C2 = (0.03 * data_range) ** 2
+
+    kernel = _gaussian_kernel_2d(kernel_size, sigma, pred.device)
+    pad = kernel_size // 2
+
+    mu_p = F.conv2d(pred, kernel, padding=pad)
+    mu_t = F.conv2d(target, kernel, padding=pad)
+
+    mu_p_sq = mu_p ** 2
+    mu_t_sq = mu_t ** 2
+    mu_pt = mu_p * mu_t
+
+    sigma_p_sq = F.conv2d(pred ** 2, kernel, padding=pad) - mu_p_sq
+    sigma_t_sq = F.conv2d(target ** 2, kernel, padding=pad) - mu_t_sq
+    sigma_pt = F.conv2d(pred * target, kernel, padding=pad) - mu_pt
+
+    numerator = (2 * mu_pt + C1) * (2 * sigma_pt + C2)
+    denominator = (mu_p_sq + mu_t_sq + C1) * (sigma_p_sq + sigma_t_sq + C2)
+
+    ssim_map = numerator / denominator
+    return 1 - ssim_map.mean()
+
+
 class UNET(BaseModel):
     def __init__(self, normalise_input=True, normalise_output=True, batch_size=10,
                  nr_epochs=500, test_interval=10, encoded_dim_size=32, fc_size=128,
@@ -366,9 +518,13 @@ class UNET(BaseModel):
                  lambda_spectral=0.0, spectral_every_k_epochs=10,
                  lambda_subgroup=0.0, lambda_cold=0.0,
                  cold_threshold_k=10.0, era5_channel_idx=3, era5_cond_idx=0,
-                 lambda_local_var=0.0, activation='relu',
+                 lambda_local_var=0.0,
+                 lambda_ms_pearson=0.0, lambda_gradient=0.0, lambda_ssim=0.0,
+                 activation='relu',
                  n_res_blocks_hi=1,
-                 cond_variables=None):
+                 cond_variables=None,
+                 cond_inject_stages=None,
+                 cond_method='concat'):
         """
         Create a convolutional autoencoder general model
 
@@ -390,6 +546,8 @@ class UNET(BaseModel):
         :param checkpoint_interval: save checkpoint every N epochs (None to disable)
         :param bottleneck_type: 'fc' for FC bottleneck (default), 'conv' for fully convolutional UNET
         :param use_attention: whether to use channel attention on skip connections (default True)
+        :param cond_inject_stages: set of stage names for conditioning injection (default: all stages)
+        :param cond_method: conditioning method - 'concat' or 'film' (default: 'concat')
         """
         super().__init__()
         self.normalise_input = normalise_input
@@ -443,9 +601,15 @@ class UNET(BaseModel):
         self.era5_channel_idx = era5_channel_idx
         self.era5_cond_idx = era5_cond_idx
         self.lambda_local_var = lambda_local_var
+        self.lambda_ms_pearson = lambda_ms_pearson
+        self.lambda_gradient = lambda_gradient
+        self.lambda_ssim = lambda_ssim
         self.activation = activation
         self.n_res_blocks_hi = n_res_blocks_hi
         self.cond_variables = cond_variables or []
+        self.input_variables = []
+        self.cond_inject_stages = cond_inject_stages  # None = all stages (default)
+        self.cond_method = cond_method
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
 
@@ -491,9 +655,15 @@ class UNET(BaseModel):
             "era5_channel_idx": self.era5_channel_idx,
             "era5_cond_idx": self.era5_cond_idx,
             "lambda_local_var": self.lambda_local_var,
+            "lambda_ms_pearson": self.lambda_ms_pearson,
+            "lambda_gradient": self.lambda_gradient,
+            "lambda_ssim": self.lambda_ssim,
             "activation": self.activation,
             "n_res_blocks_hi": self.n_res_blocks_hi,
             "cond_variables": self.cond_variables,
+            "input_variables": self.input_variables,
+            "cond_inject_stages": sorted(self.cond_inject_stages) if self.cond_inject_stages is not None else None,
+            "cond_method": self.cond_method,
             "model_id": self.get_model_id()
         }
 
@@ -588,7 +758,8 @@ class UNET(BaseModel):
         is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
                             global_epoch % self.spectral_every_k_epochs == 0)
         acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
-                                  'subgroup', 'cold', 'hard_cold', 'local_var']}
+                                  'subgroup', 'cold', 'hard_cold', 'local_var',
+                                  'ms_pearson', 'gradient', 'ssim']}
         n_batches = 0
 
         for i, (low_res, high_res, labels) in enumerate(data_loader):
@@ -640,6 +811,24 @@ class UNET(BaseModel):
                 combined_loss = combined_loss + l_lv
                 acc['local_var'] += l_lv.item()
 
+            # Multi-scale Pearson loss
+            if self.lambda_ms_pearson > 0:
+                l_msp = self.lambda_ms_pearson * compute_multiscale_pearson_loss(decoded_data, high_res)
+                combined_loss = combined_loss + l_msp
+                acc['ms_pearson'] += l_msp.item()
+
+            # Gradient (Sobel) loss
+            if self.lambda_gradient > 0:
+                l_grad = self.lambda_gradient * compute_gradient_loss(decoded_data, high_res)
+                combined_loss = combined_loss + l_grad
+                acc['gradient'] += l_grad.item()
+
+            # SSIM loss
+            if self.lambda_ssim > 0:
+                l_ssim = self.lambda_ssim * compute_ssim_loss(decoded_data, high_res)
+                combined_loss = combined_loss + l_ssim
+                acc['ssim'] += l_ssim.item()
+
             combined_loss.backward()
             torch.nn.utils.clip_grad_norm_(list(self.encoder.parameters()) + list(self.decoder.parameters()), max_norm=1.0)
             self.optim.step()
@@ -656,7 +845,8 @@ class UNET(BaseModel):
 
     def __test_epoch_from_loader(self, data_loader, device, save_arr=None):
         """Test epoch iterating DataLoader directly (no batch preloading)."""
-        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'hard_cold', 'spectral']}
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'hard_cold', 'spectral',
+                                  'ms_pearson', 'gradient', 'ssim']}
         n_batches = 0
         self.encoder.eval()
         self.decoder.eval()
@@ -675,6 +865,9 @@ class UNET(BaseModel):
                 era5_map = self._extract_era5_map(inputs=low_res)
                 acc['hard_cold'] += self._hard_cold_pct(decoded_data, era5_map)
                 acc['spectral'] += compute_spectral_loss(decoded_data, high_res).item()
+                acc['ms_pearson'] += compute_multiscale_pearson_loss(decoded_data, high_res).item()
+                acc['gradient'] += compute_gradient_loss(decoded_data, high_res).item()
+                acc['ssim'] += compute_ssim_loss(decoded_data, high_res).item()
 
                 if save_arr is not None:
                     B = decoded_data.shape[0]
@@ -763,7 +956,8 @@ class UNET(BaseModel):
         is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
                             global_epoch % self.spectral_every_k_epochs == 0)
         acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
-                                  'subgroup', 'cold', 'hard_cold', 'local_var']}
+                                  'subgroup', 'cold', 'hard_cold', 'local_var',
+                                  'ms_pearson', 'gradient', 'ssim']}
         n_batches = 0
 
         for batch in data_loader:
@@ -814,6 +1008,24 @@ class UNET(BaseModel):
                 combined_loss = combined_loss + l_lv
                 acc['local_var'] += l_lv.item()
 
+            # Multi-scale Pearson loss
+            if self.lambda_ms_pearson > 0:
+                l_msp = self.lambda_ms_pearson * compute_multiscale_pearson_loss(pred, targets_b)
+                combined_loss = combined_loss + l_msp
+                acc['ms_pearson'] += l_msp.item()
+
+            # Gradient (Sobel) loss
+            if self.lambda_gradient > 0:
+                l_grad = self.lambda_gradient * compute_gradient_loss(pred, targets_b)
+                combined_loss = combined_loss + l_grad
+                acc['gradient'] += l_grad.item()
+
+            # SSIM loss
+            if self.lambda_ssim > 0:
+                l_ssim = self.lambda_ssim * compute_ssim_loss(pred, targets_b)
+                combined_loss = combined_loss + l_ssim
+                acc['ssim'] += l_ssim.item()
+
             combined_loss.backward()
             torch.nn.utils.clip_grad_norm_(
                 list(self.encoder.parameters()) + list(self.decoder.parameters()),
@@ -832,7 +1044,8 @@ class UNET(BaseModel):
 
     def __test_epoch_conditioned(self, data_loader, device, save_arr=None):
         """Test epoch for conditioned architecture (4-tuple batches)."""
-        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'hard_cold', 'spectral']}
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'hard_cold', 'spectral',
+                                  'ms_pearson', 'gradient', 'ssim']}
         n_batches = 0
         self.encoder.eval()
         self.decoder.eval()
@@ -849,6 +1062,9 @@ class UNET(BaseModel):
                 era5_map = self._extract_era5_map(cond=cond_b)
                 acc['hard_cold'] += self._hard_cold_pct(pred, era5_map)
                 acc['spectral'] += compute_spectral_loss(pred, targets_b).item()
+                acc['ms_pearson'] += compute_multiscale_pearson_loss(pred, targets_b).item()
+                acc['gradient'] += compute_gradient_loss(pred, targets_b).item()
+                acc['ssim'] += compute_ssim_loss(pred, targets_b).item()
 
                 if save_arr is not None:
                     B = pred.shape[0]
@@ -1155,20 +1371,26 @@ class UNET(BaseModel):
             spatial_ch = input_chan  # from get_input_shape() = spatial only
             
             if not self.cond_variables and hasattr(train_ds, 'get_cond_variables'):
-                self.cond_variables = train_ds.get_cond_variables() 
+                self.cond_variables = train_ds.get_cond_variables()
+            if not self.input_variables:
+                self.input_variables = list(train_ds.input_variables)
                 
             self.input_shape = (spatial_ch + self.cond_dim, input_y, input_x)
+            # Convert cond_inject_stages list to set for encoder/decoder
+            _inject = set(self.cond_inject_stages) if self.cond_inject_stages is not None else None
             if not self.encoder:
                 self.encoder = ConditionedEncoder(
                     spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
                     base_channels=self.base_channels, dropout_rate=self.dropout_rate,
-                    activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi)
+                    activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi,
+                    inject_stages=_inject, cond_method=self.cond_method)
             if not self.decoder:
                 self.decoder = ConditionedDecoder(
                     out_channels=output_chan, cond_dim=self.cond_dim,
                     base_channels=self.base_channels, dropout_rate=self.dropout_rate,
                     output_activation=self.output_activation, activation=self.activation,
-                    n_res_blocks_hi=self.n_res_blocks_hi)
+                    n_res_blocks_hi=self.n_res_blocks_hi,
+                    inject_stages=_inject, cond_method=self.cond_method)
             n_enc = sum(p.numel() for p in self.encoder.parameters())
             n_dec = sum(p.numel() for p in self.decoder.parameters())
             print(f"Conditioned UNet: spatial_ch={spatial_ch}, cond_dim={self.cond_dim}")
@@ -1212,7 +1434,11 @@ class UNET(BaseModel):
 
         self.loss_fn = torch.nn.MSELoss()
 
-        if self.lambda_spectral > 0 or self.lambda_subgroup > 0 or self.lambda_cold > 0 or self.lambda_local_var > 0:
+        _any_aux = (self.lambda_spectral > 0 or self.lambda_subgroup > 0 or
+                    self.lambda_cold > 0 or self.lambda_local_var > 0 or
+                    self.lambda_ms_pearson > 0 or self.lambda_gradient > 0 or
+                    self.lambda_ssim > 0)
+        if _any_aux:
             print(f'Aux losses: lambda_spectral={self.lambda_spectral}, '
                   f'spectral_every_k={self.spectral_every_k_epochs}, '
                   f'lambda_subgroup={self.lambda_subgroup}, '
@@ -1220,6 +1446,9 @@ class UNET(BaseModel):
                   f'cold_threshold_k={self.cold_threshold_k}, '
                   f'lambda_l1={self.lambda_l1}, '
                   f'lambda_local_var={self.lambda_local_var}')
+            print(f'Spatial losses: lambda_ms_pearson={self.lambda_ms_pearson}, '
+                  f'lambda_gradient={self.lambda_gradient}, '
+                  f'lambda_ssim={self.lambda_ssim}')
 
         if self.architecture == 'flow_matching':
             self.flow_model.to(device)
@@ -1364,6 +1593,13 @@ class UNET(BaseModel):
                         print(f"  aux:        subgroup={train_m.get('subgroup',0):.6f}  "
                               f"cold={train_m.get('cold',0):.6f}  "
                               f"local_var={train_m.get('local_var',0):.6f}")
+                    if train_m.get('ms_pearson', 0) > 0 or train_m.get('gradient', 0) > 0 or train_m.get('ssim', 0) > 0:
+                        print(f"  spatial:    ms_pearson={train_m.get('ms_pearson',0):.6f}  "
+                              f"gradient={train_m.get('gradient',0):.6f}  "
+                              f"ssim={train_m.get('ssim',0):.6f}")
+                        print(f"  spatial(t): ms_pearson={test_m.get('ms_pearson',0):.6f}  "
+                              f"gradient={test_m.get('gradient',0):.6f}  "
+                              f"ssim={test_m.get('ssim',0):.6f}")
                     print(f"  lr:         {lr:.2e}")
 
                     # ---- History ----
@@ -1622,10 +1858,17 @@ class UNET(BaseModel):
             self.era5_channel_idx = parameters.get("era5_channel_idx", 3)
             self.era5_cond_idx = parameters.get("era5_cond_idx", 0)
             self.lambda_local_var = parameters.get("lambda_local_var", 0.0)
+            self.lambda_ms_pearson = parameters.get("lambda_ms_pearson", 0.0)
+            self.lambda_gradient = parameters.get("lambda_gradient", 0.0)
+            self.lambda_ssim = parameters.get("lambda_ssim", 0.0)
             self.activation = parameters.get("activation", "relu")
             self.n_res_blocks_hi = parameters.get("n_res_blocks_hi", 1)
             self.cond_variables = parameters.get("cond_variables", [])
-            
+            self.input_variables = parameters.get("input_variables", [])
+            _stages = parameters.get("cond_inject_stages", None)
+            self.cond_inject_stages = _stages  # None = all stages (default)
+            self.cond_method = parameters.get("cond_method", "concat")
+
         use_fc = (self.bottleneck_type == 'fc')
 
         history_path = os.path.join(from_folder, "history.json")
@@ -1655,15 +1898,18 @@ class UNET(BaseModel):
             input_chan = self.input_shape[0]
             output_chan = self.output_shape[0]
             spatial_ch = input_chan - self.cond_dim
+            _inject = set(self.cond_inject_stages) if self.cond_inject_stages is not None else None
             self.encoder = ConditionedEncoder(
                 spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
                 base_channels=self.base_channels, dropout_rate=self.dropout_rate,
-                activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi)
+                activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi,
+                inject_stages=_inject, cond_method=self.cond_method)
             self.decoder = ConditionedDecoder(
                 out_channels=output_chan, cond_dim=self.cond_dim,
                 base_channels=self.base_channels, dropout_rate=self.dropout_rate,
                 output_activation=self.output_activation, activation=self.activation,
-                n_res_blocks_hi=self.n_res_blocks_hi)
+                n_res_blocks_hi=self.n_res_blocks_hi,
+                inject_stages=_inject, cond_method=self.cond_method)
         elif self.architecture == 'standard':
             input_chan = self.input_shape[0]
             output_chan = self.output_shape[0]

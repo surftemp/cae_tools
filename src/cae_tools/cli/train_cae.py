@@ -101,13 +101,34 @@ def main():
                         help="index of ERA5 skt in conditioning vector for conditioned arch (default: 0)")
     parser.add_argument("--lambda-local-var", type=float, default=0.0,
                         help="weight for local variance texture loss (default: 0.0 = disabled)")
+    parser.add_argument("--lambda-ms-pearson", type=float, default=0.0,
+                        help="weight for multi-scale Pearson correlation loss (default: 0.0 = disabled)")
+    parser.add_argument("--lambda-gradient", type=float, default=0.0,
+                        help="weight for gradient (Sobel) edge loss (default: 0.0 = disabled)")
+    parser.add_argument("--lambda-ssim", type=float, default=0.0,
+                        help="weight for patch-wise SSIM loss (default: 0.0 = disabled)")
     parser.add_argument("--activation", choices=["relu", "silu"], default="relu",
                         help="activation function for ResidualBlocks (default: relu)")
     parser.add_argument("--n-res-blocks-hi", type=int, choices=[1, 2], default=1,
                         help="number of ResidualBlocks at high-res encoder/decoder stages "
                              "for conditioned arch (default: 1, use 2 for texture capacity)")
+    parser.add_argument("--cond-inject", type=str, default=None,
+                        help="comma-separated list of stages to inject conditioning "
+                             "(e.g. 'bridge' or 'e1,e2,e3,e4,bridge,d4,d3,d2,d1'). "
+                             "Default: all stages. Only used with --architecture conditioned")
+    parser.add_argument("--cond-method", type=str, choices=["concat", "film"], default="concat",
+                        help="conditioning method: 'concat' (default) or 'film' (FiLM modulation)")
 
     args = parser.parse_args()
+
+    # Parse --cond-inject into a list of stage names (or None for all)
+    _cond_inject_stages = None
+    if args.cond_inject is not None:
+        _cond_inject_stages = [s.strip() for s in args.cond_inject.split(',')]
+        _valid = {'e1', 'e2', 'e3', 'e4', 'bridge', 'd4', 'd3', 'd2', 'd1'}
+        for s in _cond_inject_stages:
+            if s not in _valid:
+                raise ValueError(f"Invalid stage name '{s}' in --cond-inject. Valid: {sorted(_valid)}")
 
     # Preprocessed mode - use .pt files
     if args.preprocessed:
@@ -116,13 +137,7 @@ def main():
         
         print("Loading preprocessed data...")
 
-        # Auto-detect conditioned format by checking .pt file contents
-        import torch as _torch
-        _probe = _torch.load(args.train_inputs[0], map_location='cpu', weights_only=False)
-        _is_conditioned = (_probe.get('format') == 'conditioned')
-        del _probe
-
-        if _is_conditioned or args.architecture == 'conditioned':
+        if args.architecture == 'conditioned':
             train_ds = ConditionedPreprocessedDataset(args.train_inputs[0])
             test_ds = ConditionedPreprocessedDataset(args.test_inputs[0])
             _cond_dim = train_ds.get_cond_dim()
@@ -192,8 +207,13 @@ def main():
                           era5_channel_idx=args.era5_channel_idx,
                           era5_cond_idx=args.era5_cond_idx,
                           lambda_local_var=args.lambda_local_var,
+                          lambda_ms_pearson=args.lambda_ms_pearson,
+                          lambda_gradient=args.lambda_gradient,
+                          lambda_ssim=args.lambda_ssim,
                           activation=args.activation,
-                          n_res_blocks_hi=args.n_res_blocks_hi)
+                          n_res_blocks_hi=args.n_res_blocks_hi,
+                          cond_inject_stages=_cond_inject_stages,
+                          cond_method=args.cond_method)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:

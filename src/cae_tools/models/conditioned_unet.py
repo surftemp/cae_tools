@@ -1,32 +1,26 @@
 """
-Conditioned UNet: Standard UNet backbone with per-level conditioning injection.
+Conditioned UNet: Standard UNet backbone with configurable conditioning injection.
 
-Atmospheric/temporal scalars (ERA5 variables, sin/cos DOY) are concatenated
-with spatial feature maps at every encoder and decoder stage. This allows
-the 3x3 conv kernels to learn spatially-varying interactions between
-atmospheric state and terrain features (e.g. wind × valley → cold pooling).
+Conditioning injection is controlled by two parameters:
+- inject_stages: set of stage names where conditioning is applied
+  Stage names: e1, e2, e3, e4, bridge (encoder), d4, d3, d2, d1 (decoder)
+- cond_method: 'concat' or 'film'
 
-The conditioning vector is tiled to the spatial resolution at each level
-and concatenated channel-wise before the ResidualBlock. Each ResidualBlock's
-first conv therefore has (C_features + C_cond) input channels, learning
-cross-terms between conditioning and spatial features directly.
+Default (all stages, concat) reproduces the original v9 architecture exactly.
+Bottleneck-only (inject_stages={'bridge'}) reduces ERA5 influence and tile
+boundary artifacts.
 
-Architecture details (v9 texture improvements):
-- Stages 1-2 (full/half resolution) use TWO sequential ResidualBlocks each,
-  increasing receptive field from 5x5 to 9x9 at the scales where parcel-level
-  texture (2-5 pixel, 100-300m) needs to be generated.
-- Stages 3-4 and bridge use single ResidualBlocks (low-frequency content only).
-- Decoder uses 3x3 conv after bilinear upsampling (not 1x1), so spatial
-  features can be created BEFORE skip concatenation rather than being locked
-  into bilinear smoothness.
+Concat mode: tiles conditioning vector to spatial dims and concatenates
+channel-wise before the ResidualBlock. The ResidualBlock's first conv
+learns cross-terms between conditioning and spatial features.
+
+FiLM mode (Feature-wise Linear Modulation): an MLP maps the conditioning
+vector to per-channel scale and bias. Applied as x * scale + bias, so the
+feature map dimensions are unchanged (no extra channels).
 
 Interface matches StandardEncoder/StandardDecoder for drop-in use:
     encoder(spatial_input, cond) -> (encoded, skips)
     decoder(encoded, skips, cond) -> output
-
-The conditioning vector can be raw scalar values (e.g. 11 floats) or
-flattened 2x2 grids (e.g. 44 floats). No MLP is used — the conv layers
-at each level learn the cross-variable interactions directly.
 """
 
 import torch
@@ -35,19 +29,76 @@ import torch.nn.functional as F
 
 from .standard_unet import ResidualBlock
 
+ALL_STAGES = frozenset({'e1', 'e2', 'e3', 'e4', 'bridge', 'd4', 'd3', 'd2', 'd1'})
+
+
+class ConditioningModule(nn.Module):
+    """
+    Per-stage conditioning injection module.
+
+    Args:
+        feature_channels: number of feature map channels at this stage
+        cond_dim: dimension of the conditioning vector
+        method: 'concat' or 'film'
+    """
+
+    def __init__(self, feature_channels, cond_dim, method='concat'):
+        super().__init__()
+        self.feature_channels = feature_channels
+        self.cond_dim = cond_dim
+        self.method = method
+
+        if method == 'concat':
+            self._out_channels = feature_channels + cond_dim
+        elif method == 'film':
+            self._out_channels = feature_channels
+            self.mlp = nn.Sequential(
+                nn.Linear(cond_dim, cond_dim * 2),
+                nn.ReLU(inplace=True),
+                nn.Linear(cond_dim * 2, feature_channels * 2),
+            )
+            # Initialize scale near 1, bias near 0
+            nn.init.ones_(self.mlp[-1].weight[:feature_channels].data.mul_(0.01))
+            nn.init.zeros_(self.mlp[-1].bias[:feature_channels])
+            nn.init.zeros_(self.mlp[-1].weight[feature_channels:])
+            nn.init.zeros_(self.mlp[-1].bias[feature_channels:])
+        else:
+            raise ValueError(f"Unknown conditioning method: {method}")
+
+    @property
+    def out_channels(self):
+        return self._out_channels
+
+    def forward(self, x, cond):
+        """
+        Args:
+            x: (B, C, H, W) feature maps
+            cond: (B, cond_dim) conditioning vector
+
+        Returns:
+            (B, out_channels, H, W) — out_channels = C + cond_dim for concat,
+            C for film
+        """
+        if self.method == 'concat':
+            c = cond[:, :, None, None].expand(-1, -1, x.shape[2], x.shape[3])
+            return torch.cat([x, c], dim=1)
+        else:  # film
+            params = self.mlp(cond)  # (B, C*2)
+            scale = params[:, :self.feature_channels, None, None]  # (B, C, 1, 1)
+            bias = params[:, self.feature_channels:, None, None]
+            return x * (1 + scale) + bias
+
+
+def _cond_extra(cond_dim, stage_name, inject_stages, method):
+    """Return extra input channels for a stage: cond_dim if concat+injected, else 0."""
+    if stage_name in inject_stages and method == 'concat':
+        return cond_dim
+    return 0
+
 
 class ConditionedEncoder(nn.Module):
     """
-    UNet encoder with conditioning concatenation at every stage.
-
-    At each stage, the conditioning vector is tiled to match the current
-    spatial resolution and concatenated with the feature maps before the
-    ResidualBlock.
-
-    When n_res_blocks_hi=2, stages 1-2 use two sequential ResidualBlocks
-    (9x9 receptive field) for parcel-scale texture capacity. When
-    n_res_blocks_hi=1 (default), all stages use single blocks (backward
-    compatible with existing checkpoints).
+    UNet encoder with configurable per-stage conditioning injection.
 
     Args:
         spatial_in_channels: number of spatial input channels
@@ -56,92 +107,127 @@ class ConditionedEncoder(nn.Module):
         dropout_rate: dropout rate for ResidualBlocks
         activation: 'relu' or 'silu'
         n_res_blocks_hi: number of ResidualBlocks at stages 1-2 (1 or 2)
+        inject_stages: set of stage names to inject conditioning (default: all)
+        cond_method: 'concat' or 'film' (default: 'concat')
     """
 
     def __init__(self, spatial_in_channels, cond_dim, base_channels=64,
-                 dropout_rate=0.0, activation='relu', n_res_blocks_hi=1):
+                 dropout_rate=0.0, activation='relu', n_res_blocks_hi=1,
+                 inject_stages=None, cond_method='concat'):
         super().__init__()
 
         self.cond_dim = cond_dim
         self.n_res_blocks_hi = n_res_blocks_hi
+        self.cond_method = cond_method
         ch = base_channels
+
+        if inject_stages is None:
+            inject_stages = ALL_STAGES
+        self.inject_stages = inject_stages
+
+        # Helper: create ConditioningModule for a stage if it's in inject_stages
+        def make_cond(stage_name, feat_ch):
+            if stage_name in self.inject_stages:
+                return ConditioningModule(feat_ch, cond_dim, method=cond_method)
+            return None
+
+        # Extra channels added by concat conditioning
+        def extra(stage_name):
+            return _cond_extra(cond_dim, stage_name, self.inject_stages, cond_method)
 
         if n_res_blocks_hi == 2:
             # Double blocks at stages 1-2
+            # e1 block1: input is spatial + maybe cond
+            self.cond_e1_b1 = make_cond('e1', spatial_in_channels)
             self.stage1_block1 = ResidualBlock(
-                spatial_in_channels + cond_dim, ch,
+                spatial_in_channels + extra('e1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
+            # e1 block2: input is ch + maybe cond
+            self.cond_e1_b2 = make_cond('e1', ch)
             self.stage1_block2 = ResidualBlock(
-                ch + cond_dim, ch,
+                ch + extra('e1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
 
+            # e2 block1
+            self.cond_e2_b1 = make_cond('e2', ch)
             self.stage2_block1 = ResidualBlock(
-                ch + cond_dim, ch * 2,
+                ch + extra('e2'), ch * 2,
                 dropout_rate=dropout_rate, activation=activation)
+            # e2 block2
+            self.cond_e2_b2 = make_cond('e2', ch * 2)
             self.stage2_block2 = ResidualBlock(
-                ch * 2 + cond_dim, ch * 2,
+                ch * 2 + extra('e2'), ch * 2,
                 dropout_rate=dropout_rate, activation=activation)
         else:
             # Single blocks (backward compatible)
+            self.cond_e1 = make_cond('e1', spatial_in_channels)
             self.stage1 = ResidualBlock(
-                spatial_in_channels + cond_dim, ch,
+                spatial_in_channels + extra('e1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
+
+            self.cond_e2 = make_cond('e2', ch)
             self.stage2 = ResidualBlock(
-                ch + cond_dim, ch * 2,
+                ch + extra('e2'), ch * 2,
                 dropout_rate=dropout_rate, activation=activation)
 
         self.pool1 = nn.MaxPool2d(2, 2)
         self.pool2 = nn.MaxPool2d(2, 2)
 
         # Stages 3-4 and bridge: always single block
+        self.cond_e3 = make_cond('e3', ch * 2)
         self.stage3 = ResidualBlock(
-            ch * 2 + cond_dim, ch * 4,
+            ch * 2 + extra('e3'), ch * 4,
             dropout_rate=dropout_rate, activation=activation)
         self.pool3 = nn.MaxPool2d(2, 2)
 
+        self.cond_e4 = make_cond('e4', ch * 4)
         self.stage4 = ResidualBlock(
-            ch * 4 + cond_dim, ch * 8,
+            ch * 4 + extra('e4'), ch * 8,
             dropout_rate=dropout_rate, activation=activation)
         self.pool4 = nn.MaxPool2d(2, 2)
 
+        self.cond_bridge = make_cond('bridge', ch * 8)
         self.bridge = ResidualBlock(
-            ch * 8 + cond_dim, ch * 8,
+            ch * 8 + extra('bridge'), ch * 8,
             dropout_rate=dropout_rate, activation=activation)
 
-    def _tile_cond(self, cond, h, w):
-        """Tile conditioning vector (B, cond_dim) to (B, cond_dim, H, W)."""
-        return cond[:, :, None, None].expand(-1, -1, h, w)
+    def _apply_cond(self, x, cond, cond_module):
+        """Apply conditioning module if it exists, otherwise return x unchanged."""
+        if cond_module is not None:
+            return cond_module(x, cond)
+        return x
 
     def forward(self, x, cond):
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
-
         if self.n_res_blocks_hi == 2:
-            x = self.stage1_block1(torch.cat([x, c], dim=1))
-            c = self._tile_cond(cond, x.shape[2], x.shape[3])
-            s1 = self.stage1_block2(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_e1_b1)
+            x = self.stage1_block1(x)
+            x = self._apply_cond(x, cond, self.cond_e1_b2)
+            s1 = self.stage1_block2(x)
         else:
-            s1 = self.stage1(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_e1)
+            s1 = self.stage1(x)
         x = self.pool1(s1)
 
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
         if self.n_res_blocks_hi == 2:
-            x = self.stage2_block1(torch.cat([x, c], dim=1))
-            c = self._tile_cond(cond, x.shape[2], x.shape[3])
-            s2 = self.stage2_block2(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_e2_b1)
+            x = self.stage2_block1(x)
+            x = self._apply_cond(x, cond, self.cond_e2_b2)
+            s2 = self.stage2_block2(x)
         else:
-            s2 = self.stage2(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_e2)
+            s2 = self.stage2(x)
         x = self.pool2(s2)
 
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
-        s3 = self.stage3(torch.cat([x, c], dim=1))
+        x = self._apply_cond(x, cond, self.cond_e3)
+        s3 = self.stage3(x)
         x = self.pool3(s3)
 
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
-        s4 = self.stage4(torch.cat([x, c], dim=1))
+        x = self._apply_cond(x, cond, self.cond_e4)
+        s4 = self.stage4(x)
         x = self.pool4(s4)
 
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
-        x = self.bridge(torch.cat([x, c], dim=1))
+        x = self._apply_cond(x, cond, self.cond_bridge)
+        x = self.bridge(x)
 
         skips = [s1, s2, s3, s4]
         return x, skips
@@ -149,12 +235,7 @@ class ConditionedEncoder(nn.Module):
 
 class ConditionedDecoder(nn.Module):
     """
-    UNet decoder with conditioning concatenation at every stage.
-
-    When n_res_blocks_hi=2, decoder stages 3-4 (50x50 and 100x100) use two
-    sequential ResidualBlocks and 3x3 upconv for texture generation. When
-    n_res_blocks_hi=1 (default), all stages use single blocks and 1x1 upconv
-    (backward compatible with existing checkpoints).
+    UNet decoder with configurable per-stage conditioning injection.
 
     Args:
         out_channels: output channels (1 for temperature)
@@ -164,60 +245,85 @@ class ConditionedDecoder(nn.Module):
         output_activation: 'none', 'sigmoid', or 'tanh'
         activation: 'relu' or 'silu'
         n_res_blocks_hi: number of ResidualBlocks at high-res stages (1 or 2)
+        inject_stages: set of stage names to inject conditioning (default: all)
+        cond_method: 'concat' or 'film' (default: 'concat')
     """
 
     def __init__(self, out_channels=1, cond_dim=11, base_channels=64,
                  dropout_rate=0.0, output_activation='none',
-                 activation='relu', n_res_blocks_hi=1):
+                 activation='relu', n_res_blocks_hi=1,
+                 inject_stages=None, cond_method='concat'):
         super().__init__()
 
         self.cond_dim = cond_dim
         self.output_activation = output_activation
         self.n_res_blocks_hi = n_res_blocks_hi
+        self.cond_method = cond_method
         ch = base_channels
+
+        if inject_stages is None:
+            inject_stages = ALL_STAGES
+        self.inject_stages = inject_stages
+
+        def make_cond(stage_name, feat_ch):
+            if stage_name in self.inject_stages:
+                return ConditioningModule(feat_ch, cond_dim, method=cond_method)
+            return None
+
+        def extra(stage_name):
+            return _cond_extra(cond_dim, stage_name, self.inject_stages, cond_method)
 
         # Upconv kernel: 3x3 for double-block mode, 1x1 for single-block
         upk = 3 if n_res_blocks_hi == 2 else 1
         upp = 1 if n_res_blocks_hi == 2 else 0
 
-        # Stage 1 (low-res, 12x12): always single block
+        # d4 (low-res, 12x12): always single block
+        # After upsample+concat: ch*8 (from bridge) + ch*8 (skip4) = ch*16
         self.up_conv1 = nn.Conv2d(ch * 8, ch * 8, kernel_size=upk, padding=upp)
+        self.cond_d4 = make_cond('d4', ch * 8 + ch * 8)
         self.dec_block1 = ResidualBlock(
-            ch * 8 + ch * 8 + cond_dim, ch * 4,
+            ch * 8 + ch * 8 + extra('d4'), ch * 4,
             dropout_rate=dropout_rate, activation=activation)
 
-        # Stage 2 (25x25): always single block
+        # d3 (25x25): always single block
         self.up_conv2 = nn.Conv2d(ch * 4, ch * 4, kernel_size=upk, padding=upp)
+        self.cond_d3 = make_cond('d3', ch * 4 + ch * 4)
         self.dec_block2 = ResidualBlock(
-            ch * 4 + ch * 4 + cond_dim, ch * 2,
+            ch * 4 + ch * 4 + extra('d3'), ch * 2,
             dropout_rate=dropout_rate, activation=activation)
 
-        # Stage 3 (50x50)
+        # d2 (50x50)
         self.up_conv3 = nn.Conv2d(ch * 2, ch * 2, kernel_size=upk, padding=upp)
         if n_res_blocks_hi == 2:
+            self.cond_d2_a = make_cond('d2', ch * 2 + ch * 2)
             self.dec_block3a = ResidualBlock(
-                ch * 2 + ch * 2 + cond_dim, ch,
+                ch * 2 + ch * 2 + extra('d2'), ch,
                 dropout_rate=dropout_rate, activation=activation)
+            self.cond_d2_b = make_cond('d2', ch)
             self.dec_block3b = ResidualBlock(
-                ch + cond_dim, ch,
+                ch + extra('d2'), ch,
                 dropout_rate=dropout_rate, activation=activation)
         else:
+            self.cond_d2 = make_cond('d2', ch * 2 + ch * 2)
             self.dec_block3 = ResidualBlock(
-                ch * 2 + ch * 2 + cond_dim, ch,
+                ch * 2 + ch * 2 + extra('d2'), ch,
                 dropout_rate=dropout_rate, activation=activation)
 
-        # Stage 4 (100x100)
+        # d1 (100x100)
         self.up_conv4 = nn.Conv2d(ch, ch, kernel_size=upk, padding=upp)
         if n_res_blocks_hi == 2:
+            self.cond_d1_a = make_cond('d1', ch + ch)
             self.dec_block4a = ResidualBlock(
-                ch + ch + cond_dim, ch,
+                ch + ch + extra('d1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
+            self.cond_d1_b = make_cond('d1', ch)
             self.dec_block4b = ResidualBlock(
-                ch + cond_dim, ch,
+                ch + extra('d1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
         else:
+            self.cond_d1 = make_cond('d1', ch + ch)
             self.dec_block4 = ResidualBlock(
-                ch + ch + cond_dim, ch,
+                ch + ch + extra('d1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
 
         self.final_conv = nn.Conv2d(ch, out_channels, kernel_size=1)
@@ -229,42 +335,46 @@ class ConditionedDecoder(nn.Module):
             x, size=skip.shape[2:], mode='bilinear', align_corners=False)
         return torch.cat([x, skip], dim=1)
 
-    def _tile_cond(self, cond, h, w):
-        """Tile conditioning vector (B, cond_dim) to (B, cond_dim, H, W)."""
-        return cond[:, :, None, None].expand(-1, -1, h, w)
+    def _apply_cond(self, x, cond, cond_module):
+        """Apply conditioning module if it exists, otherwise return x unchanged."""
+        if cond_module is not None:
+            return cond_module(x, cond)
+        return x
 
     def forward(self, x, skips, cond):
         s1, s2, s3, s4 = skips
 
-        # Stage 1
+        # d4
         x = self._upsample_and_concat(x, s4, self.up_conv1)
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
-        x = self.dec_block1(torch.cat([x, c], dim=1))
+        x = self._apply_cond(x, cond, self.cond_d4)
+        x = self.dec_block1(x)
 
-        # Stage 2
+        # d3
         x = self._upsample_and_concat(x, s3, self.up_conv2)
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
-        x = self.dec_block2(torch.cat([x, c], dim=1))
+        x = self._apply_cond(x, cond, self.cond_d3)
+        x = self.dec_block2(x)
 
-        # Stage 3
+        # d2
         x = self._upsample_and_concat(x, s2, self.up_conv3)
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
         if self.n_res_blocks_hi == 2:
-            x = self.dec_block3a(torch.cat([x, c], dim=1))
-            c = self._tile_cond(cond, x.shape[2], x.shape[3])
-            x = self.dec_block3b(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_d2_a)
+            x = self.dec_block3a(x)
+            x = self._apply_cond(x, cond, self.cond_d2_b)
+            x = self.dec_block3b(x)
         else:
-            x = self.dec_block3(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_d2)
+            x = self.dec_block3(x)
 
-        # Stage 4
+        # d1
         x = self._upsample_and_concat(x, s1, self.up_conv4)
-        c = self._tile_cond(cond, x.shape[2], x.shape[3])
         if self.n_res_blocks_hi == 2:
-            x = self.dec_block4a(torch.cat([x, c], dim=1))
-            c = self._tile_cond(cond, x.shape[2], x.shape[3])
-            x = self.dec_block4b(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_d1_a)
+            x = self.dec_block4a(x)
+            x = self._apply_cond(x, cond, self.cond_d1_b)
+            x = self.dec_block4b(x)
         else:
-            x = self.dec_block4(torch.cat([x, c], dim=1))
+            x = self._apply_cond(x, cond, self.cond_d1)
+            x = self.dec_block4(x)
 
         x = self.final_conv(x)
 

@@ -16,7 +16,8 @@ import torch
 
 def create_conditioned_encoder_decoder(spatial_in_channels, cond_dim, output_channels,
                                         base_channels=64, dropout_rate=0.0,
-                                        output_activation='none'):
+                                        output_activation='none',
+                                        inject_stages=None, cond_method='concat'):
     """
     Create ConditionedEncoder and ConditionedDecoder pair.
 
@@ -27,6 +28,8 @@ def create_conditioned_encoder_decoder(spatial_in_channels, cond_dim, output_cha
         base_channels: UNet base channel count
         dropout_rate: dropout rate for ResidualBlocks
         output_activation: 'none', 'sigmoid', or 'tanh'
+        inject_stages: set of stage names for conditioning (default: all)
+        cond_method: 'concat' or 'film' (default: 'concat')
 
     Returns:
         (encoder, decoder) tuple
@@ -38,14 +41,18 @@ def create_conditioned_encoder_decoder(spatial_in_channels, cond_dim, output_cha
         spatial_in_channels=spatial_in_channels,
         cond_dim=cond_dim,
         base_channels=base_channels,
-        dropout_rate=dropout_rate)
+        dropout_rate=dropout_rate,
+        inject_stages=inject_stages,
+        cond_method=cond_method)
 
     decoder = ConditionedDecoder(
         out_channels=output_channels,
         cond_dim=cond_dim,
         base_channels=base_channels,
         dropout_rate=dropout_rate,
-        output_activation=output_activation)
+        output_activation=output_activation,
+        inject_stages=inject_stages,
+        cond_method=cond_method)
 
     return encoder, decoder
 
