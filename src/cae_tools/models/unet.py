@@ -528,7 +528,8 @@ class UNET(BaseModel):
                  n_res_blocks_hi=1,
                  cond_variables=None,
                  cond_inject_stages=None,
-                 cond_method='concat'):
+                 cond_method='concat',
+                 lc_embed_dim=0):
         """
         Create a convolutional autoencoder general model
 
@@ -614,6 +615,7 @@ class UNET(BaseModel):
         self.input_variables = []
         self.cond_inject_stages = cond_inject_stages  # None = all stages (default)
         self.cond_method = cond_method
+        self.lc_embed_dim = lc_embed_dim
         self.adversarial_loss = nn.BCELoss()
         self.device = torch.device("cuda" if self.use_gpu and torch.cuda.is_available() else "cpu")
 
@@ -668,6 +670,7 @@ class UNET(BaseModel):
             "input_variables": self.input_variables,
             "cond_inject_stages": sorted(self.cond_inject_stages) if self.cond_inject_stages is not None else None,
             "cond_method": self.cond_method,
+            "lc_embed_dim": self.lc_embed_dim,
             "model_id": self.get_model_id()
         }
 
@@ -684,6 +687,47 @@ class UNET(BaseModel):
                 return None
             return base_names + self.cond_variables
         return base_names
+
+    def _get_lc_embed_kwargs(self):
+        """Build keyword args for land cover embedding in ConditionedEncoder.
+
+        Returns a dict with lc_embed_dim, lc_num_classes, lc_min, lc_max,
+        lc_channel_idx if embedding is enabled (lc_embed_dim > 0), else
+        just lc_embed_dim=0.
+        """
+        if self.lc_embed_dim <= 0:
+            return {'lc_embed_dim': 0}
+
+        norm = self.normalisation_parameters
+        if isinstance(norm, dict) and 'min_inputs' in norm:
+            lc_min = norm['min_inputs'].get('land_cover', 0.0)
+            lc_max = norm['max_inputs'].get('land_cover', 0.0)
+        elif isinstance(norm, list) and len(norm) >= 2:
+            lc_min = norm[0].get('land_cover', 0.0)
+            lc_max = norm[1].get('land_cover', 0.0)
+        else:
+            raise ValueError(
+                f"Cannot extract land_cover normalisation from parameters: {type(norm)}")
+
+        num_classes = int(round(lc_max - lc_min)) + 1
+        # Determine channel index
+        if self.input_variables and 'land_cover' in self.input_variables:
+            # For conditioned arch, spatial_variables are the non-cond subset
+            spatial_vars = [v for v in self.input_variables
+                            if v not in self.cond_variables]
+            lc_idx = spatial_vars.index('land_cover') if 'land_cover' in spatial_vars else 0
+        else:
+            lc_idx = 0
+
+        print(f"  LC embedding: dim={self.lc_embed_dim}, classes={num_classes}, "
+              f"range=[{lc_min}, {lc_max}], channel_idx={lc_idx}")
+        return {
+            'lc_embed_dim': self.lc_embed_dim,
+            'lc_num_classes': num_classes,
+            'lc_min': lc_min,
+            'lc_max': lc_max,
+            'lc_channel_idx': lc_idx,
+        }
 
     def compute_gradient_penalty(self, D, real_samples, fake_samples):
         """Calculates the gradient penalty loss for WGAN GP"""
@@ -1512,12 +1556,14 @@ class UNET(BaseModel):
             self.input_shape = (spatial_ch + self.cond_dim, input_y, input_x)
             # Convert cond_inject_stages list to set for encoder/decoder
             _inject = set(self.cond_inject_stages) if self.cond_inject_stages is not None else None
+            _lc_kw = self._get_lc_embed_kwargs()
             if not self.encoder:
                 self.encoder = ConditionedEncoder(
                     spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
                     base_channels=self.base_channels, dropout_rate=self.dropout_rate,
                     activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi,
-                    inject_stages=_inject, cond_method=self.cond_method)
+                    inject_stages=_inject, cond_method=self.cond_method,
+                    **_lc_kw)
             if not self.decoder:
                 self.decoder = ConditionedDecoder(
                     out_channels=output_chan, cond_dim=self.cond_dim,
@@ -2011,6 +2057,7 @@ class UNET(BaseModel):
             _stages = parameters.get("cond_inject_stages", None)
             self.cond_inject_stages = _stages  # None = all stages (default)
             self.cond_method = parameters.get("cond_method", "concat")
+            self.lc_embed_dim = parameters.get("lc_embed_dim", 0)
 
         use_fc = (self.bottleneck_type == 'fc')
 
@@ -2050,11 +2097,13 @@ class UNET(BaseModel):
             output_chan = self.output_shape[0]
             spatial_ch = input_chan - self.cond_dim
             _inject = set(self.cond_inject_stages) if self.cond_inject_stages is not None else None
+            _lc_kw = self._get_lc_embed_kwargs()
             self.encoder = ConditionedEncoder(
                 spatial_in_channels=spatial_ch, cond_dim=self.cond_dim,
                 base_channels=self.base_channels, dropout_rate=self.dropout_rate,
                 activation=self.activation, n_res_blocks_hi=self.n_res_blocks_hi,
-                inject_stages=_inject, cond_method=self.cond_method)
+                inject_stages=_inject, cond_method=self.cond_method,
+                **_lc_kw)
             self.decoder = ConditionedDecoder(
                 out_channels=output_chan, cond_dim=self.cond_dim,
                 base_channels=self.base_channels, dropout_rate=self.dropout_rate,

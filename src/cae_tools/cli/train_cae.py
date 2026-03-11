@@ -118,6 +118,10 @@ def main():
                              "Default: all stages. Used with --architecture conditioned or flow_matching")
     parser.add_argument("--cond-method", type=str, choices=["concat", "film"], default="concat",
                         help="conditioning method: 'concat' (default) or 'film' (FiLM modulation)")
+    parser.add_argument("--lc-embed-dim", type=int, default=0,
+                        help="land cover embedding dimension (default: 0 = disabled, use raw channel; "
+                             "typical value: 4). Replaces the single normalized land cover channel "
+                             "with a learned embedding per class.")
 
     args = parser.parse_args()
 
@@ -213,7 +217,8 @@ def main():
                           activation=args.activation,
                           n_res_blocks_hi=args.n_res_blocks_hi,
                           cond_inject_stages=_cond_inject_stages,
-                          cond_method=args.cond_method)
+                          cond_method=args.cond_method,
+                          lc_embed_dim=args.lc_embed_dim)
             elif args.method == "linear":
                 mt = LinearModel(batch_size=args.batch_size, nr_epochs=args.nr_epochs, lr=args.learning_rate)
             else:

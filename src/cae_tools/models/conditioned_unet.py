@@ -32,6 +32,56 @@ from .standard_unet import ResidualBlock
 ALL_STAGES = frozenset({'e1', 'e2', 'e3', 'e4', 'bridge', 'd4', 'd3', 'd2', 'd1'})
 
 
+class LandCoverEmbedding(nn.Module):
+    """
+    Learnable embedding for categorical land cover channel.
+
+    Replaces the single normalized land cover channel with a dense embedding
+    vector per pixel. The input is de-normalized back to integer class indices
+    before the embedding lookup.
+
+    Args:
+        num_classes: number of land cover classes (auto-detected from norm params)
+        embed_dim: embedding dimension (replaces 1 channel with embed_dim channels)
+        lc_min: minimum land cover value in physical space (from normalisation)
+        lc_max: maximum land cover value in physical space (from normalisation)
+        lc_channel_idx: index of land cover channel in spatial inputs (default: 0)
+    """
+
+    def __init__(self, num_classes, embed_dim, lc_min, lc_max, lc_channel_idx=0):
+        super().__init__()
+        self.num_classes = num_classes
+        self.embed_dim = embed_dim
+        self.lc_channel_idx = lc_channel_idx
+        self.register_buffer('lc_min', torch.tensor(float(lc_min)))
+        self.register_buffer('lc_max', torch.tensor(float(lc_max)))
+        self.embedding = nn.Embedding(num_classes, embed_dim)
+
+    def forward(self, spatial):
+        """
+        Args:
+            spatial: (B, C_spatial, H, W) with land cover at channel lc_channel_idx
+
+        Returns:
+            (B, C_spatial - 1 + embed_dim, H, W) with land cover channel replaced
+            by embedding
+        """
+        idx = self.lc_channel_idx
+        lc_norm = spatial[:, idx, :, :]  # (B, H, W)
+
+        # De-normalize to physical integers
+        lc_phys = lc_norm * (self.lc_max - self.lc_min) + self.lc_min
+        lc_int = lc_phys.round().long().clamp(0, self.num_classes - 1)
+
+        # Embed: (B, H, W) -> (B, H, W, embed_dim) -> (B, embed_dim, H, W)
+        lc_embed = self.embedding(lc_int).permute(0, 3, 1, 2)
+
+        # Remove original land cover channel and insert embedding
+        other = torch.cat([spatial[:, :idx, :, :],
+                           spatial[:, idx+1:, :, :]], dim=1)
+        return torch.cat([lc_embed, other], dim=1)
+
+
 class ConditioningModule(nn.Module):
     """
     Per-stage conditioning injection module.
@@ -113,17 +163,30 @@ class ConditionedEncoder(nn.Module):
 
     def __init__(self, spatial_in_channels, cond_dim, base_channels=64,
                  dropout_rate=0.0, activation='relu', n_res_blocks_hi=1,
-                 inject_stages=None, cond_method='concat'):
+                 inject_stages=None, cond_method='concat',
+                 lc_embed_dim=0, lc_num_classes=0, lc_min=0.0, lc_max=0.0,
+                 lc_channel_idx=0):
         super().__init__()
 
         self.cond_dim = cond_dim
         self.n_res_blocks_hi = n_res_blocks_hi
         self.cond_method = cond_method
+        self.lc_embed_dim = lc_embed_dim
         ch = base_channels
 
         if inject_stages is None:
             inject_stages = ALL_STAGES
         self.inject_stages = inject_stages
+
+        # Land cover embedding: replaces 1 channel with embed_dim channels
+        if lc_embed_dim > 0 and lc_num_classes > 0:
+            self.lc_embedding = LandCoverEmbedding(
+                num_classes=lc_num_classes, embed_dim=lc_embed_dim,
+                lc_min=lc_min, lc_max=lc_max, lc_channel_idx=lc_channel_idx)
+            effective_spatial_ch = spatial_in_channels - 1 + lc_embed_dim
+        else:
+            self.lc_embedding = None
+            effective_spatial_ch = spatial_in_channels
 
         # Helper: create ConditioningModule for a stage if it's in inject_stages
         def make_cond(stage_name, feat_ch):
@@ -138,9 +201,9 @@ class ConditionedEncoder(nn.Module):
         if n_res_blocks_hi == 2:
             # Double blocks at stages 1-2
             # e1 block1: input is spatial + maybe cond
-            self.cond_e1_b1 = make_cond('e1', spatial_in_channels)
+            self.cond_e1_b1 = make_cond('e1', effective_spatial_ch)
             self.stage1_block1 = ResidualBlock(
-                spatial_in_channels + extra('e1'), ch,
+                effective_spatial_ch + extra('e1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
             # e1 block2: input is ch + maybe cond
             self.cond_e1_b2 = make_cond('e1', ch)
@@ -160,9 +223,9 @@ class ConditionedEncoder(nn.Module):
                 dropout_rate=dropout_rate, activation=activation)
         else:
             # Single blocks (backward compatible)
-            self.cond_e1 = make_cond('e1', spatial_in_channels)
+            self.cond_e1 = make_cond('e1', effective_spatial_ch)
             self.stage1 = ResidualBlock(
-                spatial_in_channels + extra('e1'), ch,
+                effective_spatial_ch + extra('e1'), ch,
                 dropout_rate=dropout_rate, activation=activation)
 
             self.cond_e2 = make_cond('e2', ch)
@@ -198,6 +261,10 @@ class ConditionedEncoder(nn.Module):
         return x
 
     def forward(self, x, cond):
+        # Apply land cover embedding if enabled
+        if self.lc_embedding is not None:
+            x = self.lc_embedding(x)
+
         if self.n_res_blocks_hi == 2:
             x = self._apply_cond(x, cond, self.cond_e1_b1)
             x = self.stage1_block1(x)

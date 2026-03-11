@@ -17,7 +17,9 @@ import torch
 def create_conditioned_encoder_decoder(spatial_in_channels, cond_dim, output_channels,
                                         base_channels=64, dropout_rate=0.0,
                                         output_activation='none',
-                                        inject_stages=None, cond_method='concat'):
+                                        inject_stages=None, cond_method='concat',
+                                        lc_embed_dim=0, lc_num_classes=0,
+                                        lc_min=0.0, lc_max=0.0, lc_channel_idx=0):
     """
     Create ConditionedEncoder and ConditionedDecoder pair.
 
@@ -30,6 +32,11 @@ def create_conditioned_encoder_decoder(spatial_in_channels, cond_dim, output_cha
         output_activation: 'none', 'sigmoid', or 'tanh'
         inject_stages: set of stage names for conditioning (default: all)
         cond_method: 'concat' or 'film' (default: 'concat')
+        lc_embed_dim: land cover embedding dimension (0 = disabled)
+        lc_num_classes: number of land cover classes
+        lc_min: minimum land cover value in physical space
+        lc_max: maximum land cover value in physical space
+        lc_channel_idx: index of land cover in spatial channels
 
     Returns:
         (encoder, decoder) tuple
@@ -43,7 +50,11 @@ def create_conditioned_encoder_decoder(spatial_in_channels, cond_dim, output_cha
         base_channels=base_channels,
         dropout_rate=dropout_rate,
         inject_stages=inject_stages,
-        cond_method=cond_method)
+        cond_method=cond_method,
+        lc_embed_dim=lc_embed_dim,
+        lc_num_classes=lc_num_classes,
+        lc_min=lc_min, lc_max=lc_max,
+        lc_channel_idx=lc_channel_idx)
 
     decoder = ConditionedDecoder(
         out_channels=output_channels,
