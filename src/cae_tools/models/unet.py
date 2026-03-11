@@ -4,7 +4,11 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import torch.optim as optim
 from cae_tools.models.standard_unet import StandardEncoder, StandardDecoder
-from cae_tools.models.flow_matching_unet import FlowMatchingUNet, flow_matching_loss, flow_matching_sample
+from cae_tools.models.flow_matching_unet import (
+    FlowMatchingUNet, flow_matching_loss, flow_matching_sample,
+    ConditionedFlowMatchingUNet, conditioned_flow_matching_loss,
+    conditioned_flow_matching_sample,
+)
 from cae_tools.models.conditioned_unet import ConditionedEncoder, ConditionedDecoder
 from cae_tools.models.conditioned_helpers import unpack_batch, forward_pass, split_for_scoring
 from torchvision import models
@@ -878,68 +882,168 @@ class UNET(BaseModel):
         return {k: v / max(n_batches, 1) for k, v in acc.items()}
 
     def __train_epoch_flow_matching(self, data_loader, device, global_epoch=0):
-        """Train epoch for flow matching: predict velocity field."""
+        """Train epoch for flow matching: velocity loss + conventional auxiliary losses."""
         self.flow_model.train()
-        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'spectral',
-                                  'subgroup', 'cold', 'hard_cold']}
-        n_batches = 0
+        is_conditioned_fm = (self.cond_dim > 0)
         is_pattern_epoch = (self.spectral_every_k_epochs > 0 and
                             global_epoch % self.spectral_every_k_epochs == 0)
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'velocity_mse', 'spectral',
+                                  'subgroup', 'cold', 'hard_cold', 'local_var',
+                                  'ms_pearson', 'gradient', 'ssim']}
+        n_batches = 0
 
-        for i, (conditioning, target, labels) in enumerate(data_loader):
-            conditioning = conditioning.to(device, non_blocking=True)
-            target = target.to(device, non_blocking=True)
-
-            if self.augment:
-                conditioning, target = augment_batch(conditioning, target,
-                                                      slope_dir_channel=self.slope_direction_channel)
+        for batch in data_loader:
+            if is_conditioned_fm:
+                spatial_b, cond_b, target, _ = unpack_batch(batch, device, True)
+                if self.augment:
+                    spatial_b, target = augment_batch(
+                        spatial_b, target,
+                        slope_dir_channel=self.slope_direction_channel)
+            else:
+                conditioning, target, labels = batch
+                conditioning = conditioning.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
+                if self.augment:
+                    conditioning, target = augment_batch(
+                        conditioning, target,
+                        slope_dir_channel=self.slope_direction_channel)
 
             self.optim.zero_grad()
-            loss = flow_matching_loss(self.flow_model, conditioning, target, device=device)
-            loss.backward()
+
+            # Velocity loss + reconstructed prediction
+            if is_conditioned_fm:
+                velocity_loss, pred = conditioned_flow_matching_loss(
+                    self.flow_model, spatial_b, cond_b, target, device=device)
+            else:
+                velocity_loss = flow_matching_loss(
+                    self.flow_model, conditioning, target, device=device)
+                pred = None  # no reconstruction for flat FM
+
+            combined_loss = velocity_loss
+            acc['velocity_mse'] += velocity_loss.item()
+
+            # Conventional losses on reconstructed prediction (conditioned FM only)
+            if pred is not None:
+                mse_loss = self.loss_fn(pred, target)
+                pearson_corr = self.pearson_corr_torch(pred, target)
+                pearson_loss = 1 - torch.mean(pearson_corr)
+
+                if self.lambda_pearson > 0:
+                    combined_loss = combined_loss + self.lambda_pearson * pearson_loss
+
+                if self.lambda_cold > 0:
+                    era5_map = self._extract_era5_map(cond=cond_b)
+                    l_cold = self.lambda_cold * self._soft_cold_pixel_rate(pred, era5_map)
+                    combined_loss = combined_loss + l_cold
+                    acc['cold'] += l_cold.item()
+
+                if self.lambda_subgroup > 0:
+                    era5_map = self._extract_era5_map(cond=cond_b)
+                    l_sub, _ = compute_subgroup_robustness_loss(pred, target, era5_map)
+                    combined_loss = combined_loss + self.lambda_subgroup * l_sub
+                    acc['subgroup'] += l_sub.item()
+
+                if self.lambda_spectral > 0 and is_pattern_epoch:
+                    l_spec = self.lambda_spectral * compute_spectral_loss(pred, target)
+                    combined_loss = combined_loss + l_spec
+                    acc['spectral'] += l_spec.item()
+
+                if self.lambda_l1 > 0:
+                    l1_loss = (pred - target).abs().mean()
+                    combined_loss = combined_loss + self.lambda_l1 * l1_loss
+
+                if self.lambda_local_var > 0:
+                    l_lv = self.lambda_local_var * compute_local_variance_loss(pred, target)
+                    combined_loss = combined_loss + l_lv
+                    acc['local_var'] += l_lv.item()
+
+                if self.lambda_ms_pearson > 0:
+                    l_msp = self.lambda_ms_pearson * compute_multiscale_pearson_loss(pred, target)
+                    combined_loss = combined_loss + l_msp
+                    acc['ms_pearson'] += l_msp.item()
+
+                if self.lambda_gradient > 0:
+                    l_grad = self.lambda_gradient * compute_gradient_loss(pred, target)
+                    combined_loss = combined_loss + l_grad
+                    acc['gradient'] += l_grad.item()
+
+                if self.lambda_ssim > 0:
+                    l_ssim = self.lambda_ssim * compute_ssim_loss(pred, target)
+                    combined_loss = combined_loss + l_ssim
+                    acc['ssim'] += l_ssim.item()
+
+                acc['mse'] += mse_loss.item()
+                acc['pearson'] += pearson_loss.item()
+                with torch.no_grad():
+                    acc['mae'] += (pred - target).abs().mean().item()
+                    if self.lambda_cold > 0 or self.lambda_subgroup > 0:
+                        acc['hard_cold'] += self._hard_cold_pct(pred, era5_map)
+            else:
+                acc['mse'] += velocity_loss.item()
+
+            combined_loss.backward()
             torch.nn.utils.clip_grad_norm_(self.flow_model.parameters(), max_norm=1.0)
             self.optim.step()
-            acc['mse'] += loss.item()
             n_batches += 1
 
         return {k: v / max(n_batches, 1) for k, v in acc.items()}
 
     def __test_epoch_flow_matching(self, data_loader, device, save_arr=None):
-        """Test epoch for flow matching: run Euler integration and compute metrics on output."""
+        """Test epoch for flow matching: Euler integration + full conventional metrics."""
         self.flow_model.eval()
-        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'velocity_mse', 'hard_cold', 'spectral']}
+        is_conditioned_fm = (self.cond_dim > 0)
+        acc = {k: 0.0 for k in ['mse', 'mae', 'pearson', 'velocity_mse', 'hard_cold',
+                                  'spectral', 'ms_pearson', 'gradient', 'ssim']}
         n_batches = 0
 
         with torch.no_grad():
             ctr = 0
-            for (conditioning, target, labels) in data_loader:
-                conditioning = conditioning.to(device, non_blocking=True)
-                target = target.to(device, non_blocking=True)
-                B = conditioning.shape[0]
+            for batch in data_loader:
+                if is_conditioned_fm:
+                    spatial_b, cond_b, target, _ = unpack_batch(batch, device, True)
+                else:
+                    conditioning, target, labels = batch
+                    conditioning = conditioning.to(device, non_blocking=True)
+                    target = target.to(device, non_blocking=True)
+                B = target.shape[0]
 
-                # Compute velocity MSE (same way as training for comparison)
+                # Velocity MSE (same as training, for comparison)
                 t = torch.rand(B, device=device)
                 noise = torch.randn_like(target)
                 t_expand = t[:, None, None, None]
                 x_t = (1.0 - t_expand) * noise + t_expand * target
                 velocity_target = target - noise
-                velocity_pred = self.flow_model(x_t, conditioning, t)
+                if is_conditioned_fm:
+                    velocity_pred = self.flow_model(x_t, spatial_b, cond_b, t)
+                else:
+                    velocity_pred = self.flow_model(x_t, conditioning, t)
                 acc['velocity_mse'] += F.mse_loss(velocity_pred, velocity_target).item()
-                
-                # Run inference: Euler integration from noise to prediction
-                target_shape = (B, target.shape[1], target.shape[2], target.shape[3])
-                predicted = flow_matching_sample(
-                    self.flow_model, conditioning, target_shape,
-                    num_steps=self.flow_steps, device=device
-                )
 
+                # Full Euler integration for prediction
+                target_shape = (B, target.shape[1], target.shape[2], target.shape[3])
+                if is_conditioned_fm:
+                    predicted = conditioned_flow_matching_sample(
+                        self.flow_model, spatial_b, cond_b, target_shape,
+                        num_steps=self.flow_steps, device=device)
+                else:
+                    predicted = flow_matching_sample(
+                        self.flow_model, conditioning, target_shape,
+                        num_steps=self.flow_steps, device=device)
+
+                # All conventional metrics
                 acc['mse'] += self.loss_fn(predicted, target).item()
                 acc['mae'] += (predicted - target).abs().mean().item()
                 pearson_corr = self.pearson_corr_torch(predicted, target)
                 acc['pearson'] += (1 - torch.mean(pearson_corr)).item()
-                era5_map = self._extract_era5_map(inputs=conditioning)
+                if is_conditioned_fm:
+                    era5_map = self._extract_era5_map(cond=cond_b)
+                else:
+                    era5_map = self._extract_era5_map(inputs=conditioning)
                 acc['hard_cold'] += self._hard_cold_pct(predicted, era5_map)
                 acc['spectral'] += compute_spectral_loss(predicted, target).item()
+                acc['ms_pearson'] += compute_multiscale_pearson_loss(predicted, target).item()
+                acc['gradient'] += compute_gradient_loss(predicted, target).item()
+                acc['ssim'] += compute_ssim_loss(predicted, target).item()
 
                 if save_arr is not None:
                     save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
@@ -1115,15 +1219,28 @@ class UNET(BaseModel):
             device = next(self.flow_model.parameters()).device
             with torch.no_grad():
                 ctr = 0
-                for conditioning in batches:
-                    B = conditioning.shape[0]
-                    target_shape = (B, self.output_shape[0], self.output_shape[1], self.output_shape[2])
-                    predicted = flow_matching_sample(
-                        self.flow_model, conditioning, target_shape,
-                        num_steps=self.flow_steps, device=device
-                    )
-                    save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
-                    ctr += B
+                if self.cond_dim > 0:
+                    # Conditioned FM: split input into spatial + cond scalars
+                    spatial_ch = self.input_shape[0] - self.cond_dim
+                    cond_indices = list(range(spatial_ch, self.input_shape[0]))
+                    for input_data in batches:
+                        spatial_b, cond_b = split_for_scoring(input_data, cond_indices)
+                        B = spatial_b.shape[0]
+                        target_shape = (B, self.output_shape[0], self.output_shape[1], self.output_shape[2])
+                        predicted = conditioned_flow_matching_sample(
+                            self.flow_model, spatial_b, cond_b, target_shape,
+                            num_steps=self.flow_steps, device=device)
+                        save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
+                        ctr += B
+                else:
+                    for conditioning in batches:
+                        B = conditioning.shape[0]
+                        target_shape = (B, self.output_shape[0], self.output_shape[1], self.output_shape[2])
+                        predicted = flow_matching_sample(
+                            self.flow_model, conditioning, target_shape,
+                            num_steps=self.flow_steps, device=device)
+                        save_arr[ctr:ctr + B, :, :, :] = predicted.cpu()
+                        ctr += B
         elif self.architecture == 'conditioned':
             self.encoder.eval()
             self.decoder.eval()
@@ -1359,10 +1476,27 @@ class UNET(BaseModel):
         use_fc = (self.bottleneck_type == 'fc')
         if self.architecture == 'flow_matching':
             if not self.flow_model:
-                self.flow_model = FlowMatchingUNet(
-                    cond_channels=input_chan, target_channels=output_chan,
-                    base_channels=self.base_channels, dropout_rate=self.dropout_rate
-                )
+                if self.cond_dim > 0:
+                    # Conditioned flow matching: separate spatial/scalar inputs
+                    spatial_ch = input_chan  # from get_input_shape() = spatial only
+                    self.input_shape = (spatial_ch + self.cond_dim, input_y, input_x)
+                    if not self.cond_variables and hasattr(train_ds, 'get_cond_variables'):
+                        self.cond_variables = train_ds.get_cond_variables()
+                    if not self.input_variables:
+                        self.input_variables = list(train_ds.input_variables)
+                    _inject = set(self.cond_inject_stages) if self.cond_inject_stages is not None else None
+                    self.flow_model = ConditionedFlowMatchingUNet(
+                        spatial_channels=spatial_ch, target_channels=output_chan,
+                        cond_dim=self.cond_dim, base_channels=self.base_channels,
+                        dropout_rate=self.dropout_rate, activation=self.activation,
+                        inject_stages=_inject, cond_method=self.cond_method)
+                    print(f"Conditioned Flow Matching UNet: spatial_ch={spatial_ch}, cond_dim={self.cond_dim}")
+                    _inject_str = ','.join(sorted(_inject)) if _inject else 'all'
+                    print(f"  ERA5 injection: stages={_inject_str}, method={self.cond_method}")
+                else:
+                    self.flow_model = FlowMatchingUNet(
+                        cond_channels=input_chan, target_channels=output_chan,
+                        base_channels=self.base_channels, dropout_rate=self.dropout_rate)
                 print(f"Flow Matching UNet: {sum(p.numel() for p in self.flow_model.parameters()):,} parameters")
                 print(f"Inference steps: {self.flow_steps}")
         elif self.architecture == 'conditioned':
@@ -1553,11 +1687,14 @@ class UNET(BaseModel):
 
                     # ---- Logging ----
                     is_fm = (self.architecture == 'flow_matching')
-                    p_label = "l_cfm" if is_fm else "l_mse"
+                    is_conditioned_fm = is_fm and self.cond_dim > 0
                     print(f"\nepoch: {global_epoch}")
-                    print(f"  {p_label}:      train={train_loss:.6f}  test={test_loss:.6f}  "
+                    print(f"  l_mse:      train={train_loss:.6f}  test={test_loss:.6f}  "
                           f"ema_test={_ema_test:.6f}  ema_ratio={_ema_ratio:.3f}")
-                    if not is_fm:
+                    if is_fm:
+                        print(f"  velocity:   train={train_m.get('velocity_mse',0):.6f}  "
+                              f"test={test_m.get('velocity_mse',0):.6f}")
+                    if is_conditioned_fm or not is_fm:
                         print(f"  metrics:    train_rmse={train_loss**0.5:.6f}  "
                               f"test_rmse={test_loss**0.5:.6f}  "
                               f"train_mae={train_mae:.6f}  test_mae={test_mae:.6f}  "
@@ -1569,12 +1706,11 @@ class UNET(BaseModel):
                                   f"train_mae={train_mae*out_range:.2f}K  "
                                   f"test_mae={test_mae*out_range:.2f}K")
                         except Exception:
-                            pass  # normalisation_parameters may not support K conversion
+                            pass
                         print(f"  pearson:    train={train_m.get('pearson',0):.4f}  "
                               f"test={test_pearson:.4f}")
                     else:
-                        vel_mse = test_m.get('velocity_mse', 0.0)
-                        print(f"  velocity:   test_vel_mse={vel_mse:.6f}")
+                        # Flat FM (no conditioned data) — limited metrics
                         print(f"  metrics:    test_rmse={test_loss**0.5:.6f}  "
                               f"test_mae={test_mae:.6f}  "
                               f"rmse/mae={test_loss**0.5/max(test_mae,1e-10):.3f}")
@@ -1712,6 +1848,13 @@ class UNET(BaseModel):
             s += f"\tArchitecture: flow_matching\n"
             s += f"\tBase channels: {self.base_channels}\n"
             s += f"\tInference steps: {self.flow_steps}\n"
+            if self.cond_dim > 0:
+                spatial_ch = self.input_shape[0] - self.cond_dim
+                s += f"\tSpatial channels: {spatial_ch}\n"
+                s += f"\tConditioning dim: {self.cond_dim}\n"
+                _inject = getattr(self, 'cond_inject_stages', None)
+                _inject_str = ','.join(sorted(_inject)) if _inject else 'all'
+                s += f"\tERA5 injection: stages={_inject_str}, method={self.cond_method}\n"
             s += f"\tTotal parameters: {n_params:,}\n"
             s += f"\tInput shape: {self.input_shape}\n"
             s += f"\tOutput shape: {self.output_shape}\n"
@@ -1887,10 +2030,18 @@ class UNET(BaseModel):
         if self.architecture == 'flow_matching':
             input_chan = self.input_shape[0]
             output_chan = self.output_shape[0]
-            self.flow_model = FlowMatchingUNet(
-                cond_channels=input_chan, target_channels=output_chan,
-                base_channels=self.base_channels, dropout_rate=self.dropout_rate
-            )
+            if self.cond_dim > 0:
+                spatial_ch = input_chan - self.cond_dim
+                _inject = set(self.cond_inject_stages) if self.cond_inject_stages is not None else None
+                self.flow_model = ConditionedFlowMatchingUNet(
+                    spatial_channels=spatial_ch, target_channels=output_chan,
+                    cond_dim=self.cond_dim, base_channels=self.base_channels,
+                    dropout_rate=self.dropout_rate, activation=self.activation,
+                    inject_stages=_inject, cond_method=self.cond_method)
+            else:
+                self.flow_model = FlowMatchingUNet(
+                    cond_channels=input_chan, target_channels=output_chan,
+                    base_channels=self.base_channels, dropout_rate=self.dropout_rate)
             flow_model_path = os.path.join(from_folder, "flow_model.weights")
             self.flow_model.load_state_dict(self.torch_load(flow_model_path))
             self.flow_model.eval()
@@ -2024,10 +2175,10 @@ class UNET(BaseModel):
         """
         Extract ERA5 skin temperature as (B, 1, H, W) from inputs or cond.
 
-        For standard/legacy/flow_matching: era5 is spatial channel era5_channel_idx.
-        For conditioned: era5 is conditioning scalar era5_cond_idx, broadcast to spatial.
+        If cond is provided: era5 is conditioning scalar era5_cond_idx, broadcast to spatial.
+        Otherwise: era5 is spatial channel era5_channel_idx from inputs.
         """
-        if self.architecture == 'conditioned' and cond is not None:
+        if cond is not None:
             B = cond.shape[0]
             era5_scalar = cond[:, self.era5_cond_idx:self.era5_cond_idx + 1]  # (B, 1)
             H, W = self.output_shape[1], self.output_shape[2]

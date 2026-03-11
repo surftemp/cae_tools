@@ -92,9 +92,18 @@ class BaseModel:
 
         mm = ModelMetric()
         loader = torch.utils.data.DataLoader(dataset, batch_size=self.batch_size)
-        for input, output_not_norm, labels in loader:
+        for batch in loader:
+            if len(batch) == 4:
+                # Conditioned dataset: (spatial, cond, output, label)
+                spatial, cond, output_not_norm, labels = batch
+                # Reconstruct full input for score() — broadcast cond to spatial dims
+                cond_spatial = cond[:, :, None, None].expand(
+                    -1, -1, spatial.shape[2], spatial.shape[3])
+                input = torch.cat([spatial, cond_spatial], dim=1).to(device)
+            else:
+                input, output_not_norm, labels = batch
+                input = input.to(device)
             # for each batch, score, denormalise the scores and compare with the original outputs
-            input = input.to(device)
             score_arr = np.zeros(output_not_norm.shape)
             self.score([input], save_arr=score_arr)
             output_not_norm = output_not_norm.numpy()

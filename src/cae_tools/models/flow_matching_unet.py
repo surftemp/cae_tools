@@ -6,8 +6,14 @@ Implements Rectified Flow / Flow Matching (Lipman et al. 2022, Liu et al. 2022):
 - 1-4 step inference via Euler integration
 - Same UNet backbone as StandardEncoder/StandardDecoder but with timestep conditioning
 
-The conditioning (12 input channels) is concatenated with the noisy target,
-and timestep is injected into each residual block via additive projection.
+Two variants:
+  FlowMatchingUNet: flat input — all channels concatenated with noisy target
+  ConditionedFlowMatchingUNet: spatial/scalar separation — spatial channels
+    concatenated with noisy target, ERA5 scalars injected via ConditioningModule
+    at configurable stages (same as ConditionedEncoder/Decoder)
+
+Timestep is injected into each residual block via additive projection.
+ERA5 conditioning is applied before each ResBlock at configured stages.
 """
 
 import math
@@ -298,6 +304,244 @@ def flow_matching_sample(model, conditioning, target_shape, num_steps=4, device=
         v = model(x, conditioning, t)
 
         # Euler step
+        x = x + dt * v
+
+    return x
+
+
+# =====================================================================
+# Conditioned Flow Matching UNet
+# =====================================================================
+
+from .conditioned_unet import ConditioningModule, ALL_STAGES, _cond_extra
+
+
+class ConditionedFlowMatchingUNet(nn.Module):
+    """
+    Flow Matching UNet with separate spatial/scalar conditioning.
+
+    Three orthogonal conditioning axes:
+      1. Spatial structure: concat(spatial, x_noisy) as encoder input
+      2. Weather state: ERA5 scalars via ConditioningModule at configurable stages
+      3. Flow time: sinusoidal timestep embedding at every ResBlock
+
+    Architecture mirrors ConditionedEncoder/ConditionedDecoder but uses
+    TimeConditionedResidualBlock for timestep injection.
+
+    Args:
+        spatial_channels: number of spatial input channels (e.g. 8)
+        target_channels: number of target channels (1 for temperature)
+        cond_dim: ERA5 conditioning vector dimension (e.g. 11)
+        base_channels: base UNet channel count (default 64)
+        time_embed_dim: timestep embedding dimension (default 256)
+        dropout_rate: dropout for ResidualBlocks
+        activation: activation function name (currently informational)
+        inject_stages: set of stage names for ERA5 injection (default: all)
+        cond_method: 'concat' or 'film' (default: 'concat')
+    """
+
+    def __init__(self, spatial_channels, target_channels, cond_dim,
+                 base_channels=64, time_embed_dim=256, dropout_rate=0.0,
+                 activation='silu', inject_stages=None, cond_method='concat'):
+        super().__init__()
+        self.spatial_channels = spatial_channels
+        self.target_channels = target_channels
+        self.cond_dim = cond_dim
+        self.cond_method = cond_method
+
+        in_ch = spatial_channels + target_channels  # concat spatial + noisy target
+        ch = base_channels
+
+        if inject_stages is None:
+            inject_stages = ALL_STAGES
+        self.inject_stages = inject_stages
+
+        # Timestep embedding (injected at every ResBlock)
+        self.time_embed = TimestepEmbedder(sinusoidal_dim=128, hidden_dim=time_embed_dim)
+
+        # Helper: create ConditioningModule for ERA5 at a given stage
+        def make_cond(stage_name, feat_ch):
+            if stage_name in self.inject_stages:
+                return ConditioningModule(feat_ch, cond_dim, method=cond_method)
+            return None
+
+        def extra(stage_name):
+            return _cond_extra(cond_dim, stage_name, self.inject_stages, cond_method)
+
+        # ---- Encoder ----
+        self.cond_e1 = make_cond('e1', in_ch)
+        self.enc1 = TimeConditionedResidualBlock(
+            in_ch + extra('e1'), ch, time_embed_dim, dropout_rate)
+        self.pool1 = nn.MaxPool2d(2, 2)
+
+        self.cond_e2 = make_cond('e2', ch)
+        self.enc2 = TimeConditionedResidualBlock(
+            ch + extra('e2'), ch * 2, time_embed_dim, dropout_rate)
+        self.pool2 = nn.MaxPool2d(2, 2)
+
+        self.cond_e3 = make_cond('e3', ch * 2)
+        self.enc3 = TimeConditionedResidualBlock(
+            ch * 2 + extra('e3'), ch * 4, time_embed_dim, dropout_rate)
+        self.pool3 = nn.MaxPool2d(2, 2)
+
+        self.cond_e4 = make_cond('e4', ch * 4)
+        self.enc4 = TimeConditionedResidualBlock(
+            ch * 4 + extra('e4'), ch * 8, time_embed_dim, dropout_rate)
+        self.pool4 = nn.MaxPool2d(2, 2)
+
+        # ---- Bridge ----
+        self.cond_bridge = make_cond('bridge', ch * 8)
+        self.bridge = TimeConditionedResidualBlock(
+            ch * 8 + extra('bridge'), ch * 8, time_embed_dim, dropout_rate)
+
+        # ---- Decoder ----
+        self.up_conv4 = nn.Conv2d(ch * 8, ch * 8, 1)
+        self.cond_d4 = make_cond('d4', ch * 8 + ch * 8)
+        self.dec4 = TimeConditionedResidualBlock(
+            ch * 8 + ch * 8 + extra('d4'), ch * 4, time_embed_dim, dropout_rate)
+
+        self.up_conv3 = nn.Conv2d(ch * 4, ch * 4, 1)
+        self.cond_d3 = make_cond('d3', ch * 4 + ch * 4)
+        self.dec3 = TimeConditionedResidualBlock(
+            ch * 4 + ch * 4 + extra('d3'), ch * 2, time_embed_dim, dropout_rate)
+
+        self.up_conv2 = nn.Conv2d(ch * 2, ch * 2, 1)
+        self.cond_d2 = make_cond('d2', ch * 2 + ch * 2)
+        self.dec2 = TimeConditionedResidualBlock(
+            ch * 2 + ch * 2 + extra('d2'), ch, time_embed_dim, dropout_rate)
+
+        self.up_conv1 = nn.Conv2d(ch, ch, 1)
+        self.cond_d1 = make_cond('d1', ch + ch)
+        self.dec1 = TimeConditionedResidualBlock(
+            ch + ch + extra('d1'), ch, time_embed_dim, dropout_rate)
+
+        # Output: predict velocity field
+        self.out_conv = nn.Conv2d(ch, target_channels, 1)
+
+    def _apply_cond(self, x, cond, cond_module):
+        """Apply ERA5 conditioning module if it exists."""
+        if cond_module is not None:
+            return cond_module(x, cond)
+        return x
+
+    def forward(self, x_noisy, spatial, cond, t):
+        """
+        Args:
+            x_noisy: (B, target_channels, H, W) — noisy interpolant at time t
+            spatial: (B, spatial_channels, H, W) — spatial features
+            cond: (B, cond_dim) — ERA5 conditioning scalars
+            t: (B,) — timestep in [0, 1]
+
+        Returns:
+            (B, target_channels, H, W) — predicted velocity field
+        """
+        t_emb = self.time_embed(t)
+
+        # Concatenate spatial input with noisy target
+        x = torch.cat([spatial, x_noisy], dim=1)
+
+        # ---- Encoder ----
+        x = self._apply_cond(x, cond, self.cond_e1)
+        s1 = self.enc1(x, t_emb)
+
+        x = self._apply_cond(self.pool1(s1), cond, self.cond_e2)
+        s2 = self.enc2(x, t_emb)
+
+        x = self._apply_cond(self.pool2(s2), cond, self.cond_e3)
+        s3 = self.enc3(x, t_emb)
+
+        x = self._apply_cond(self.pool3(s3), cond, self.cond_e4)
+        s4 = self.enc4(x, t_emb)
+
+        # ---- Bridge ----
+        x = self._apply_cond(self.pool4(s4), cond, self.cond_bridge)
+        b = self.bridge(x, t_emb)
+
+        # ---- Decoder ----
+        up4 = F.interpolate(b, size=s4.shape[2:], mode='bilinear', align_corners=False)
+        up4 = self.up_conv4(up4)
+        x = self._apply_cond(torch.cat([up4, s4], dim=1), cond, self.cond_d4)
+        d4 = self.dec4(x, t_emb)
+
+        up3 = F.interpolate(d4, size=s3.shape[2:], mode='bilinear', align_corners=False)
+        up3 = self.up_conv3(up3)
+        x = self._apply_cond(torch.cat([up3, s3], dim=1), cond, self.cond_d3)
+        d3 = self.dec3(x, t_emb)
+
+        up2 = F.interpolate(d3, size=s2.shape[2:], mode='bilinear', align_corners=False)
+        up2 = self.up_conv2(up2)
+        x = self._apply_cond(torch.cat([up2, s2], dim=1), cond, self.cond_d2)
+        d2 = self.dec2(x, t_emb)
+
+        up1 = F.interpolate(d2, size=s1.shape[2:], mode='bilinear', align_corners=False)
+        up1 = self.up_conv1(up1)
+        x = self._apply_cond(torch.cat([up1, s1], dim=1), cond, self.cond_d1)
+        d1 = self.dec1(x, t_emb)
+
+        return self.out_conv(d1)
+
+
+def conditioned_flow_matching_loss(model, spatial, cond, target, device=None):
+    """
+    Flow matching loss for ConditionedFlowMatchingUNet.
+
+    Returns both the velocity MSE loss and a reconstructed target prediction
+    (derived from the velocity prediction at no extra cost) for computing
+    conventional auxiliary losses.
+
+    Args:
+        model: ConditionedFlowMatchingUNet
+        spatial: (B, spatial_channels, H, W)
+        cond: (B, cond_dim) ERA5 conditioning scalars
+        target: (B, target_channels, H, W)
+        device: torch device
+
+    Returns:
+        velocity_loss: scalar MSE loss on velocity
+        pred: (B, target_channels, H, W) reconstructed target estimate
+    """
+    B = spatial.shape[0]
+    t = torch.rand(B, device=device)
+    noise = torch.randn_like(target)
+    t_expand = t[:, None, None, None]
+    x_t = (1.0 - t_expand) * noise + t_expand * target
+    velocity_target = target - noise
+
+    velocity_pred = model(x_t, spatial, cond, t)
+    velocity_loss = F.mse_loss(velocity_pred, velocity_target)
+
+    # Reconstruct target: x_1_hat = x_t + (1 - t) * v_pred
+    # Free — no extra forward pass, gradients flow through velocity_pred
+    pred = x_t + (1.0 - t_expand) * velocity_pred
+
+    return velocity_loss, pred
+
+
+@torch.no_grad()
+def conditioned_flow_matching_sample(model, spatial, cond, target_shape,
+                                      num_steps=4, device=None):
+    """
+    Euler integration for ConditionedFlowMatchingUNet.
+
+    Args:
+        model: ConditionedFlowMatchingUNet (in eval mode)
+        spatial: (B, spatial_channels, H, W)
+        cond: (B, cond_dim) ERA5 conditioning scalars
+        target_shape: tuple (B, target_channels, H, W)
+        num_steps: Euler integration steps (default 4)
+        device: torch device
+
+    Returns:
+        (B, target_channels, H, W) — predicted output
+    """
+    B = target_shape[0]
+    x = torch.randn(target_shape, device=device)
+    dt = 1.0 / num_steps
+
+    for step in range(num_steps):
+        t_val = step * dt
+        t = torch.full((B,), t_val, device=device)
+        v = model(x, spatial, cond, t)
         x = x + dt * v
 
     return x

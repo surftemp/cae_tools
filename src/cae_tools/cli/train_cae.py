@@ -115,7 +115,7 @@ def main():
     parser.add_argument("--cond-inject", type=str, default=None,
                         help="comma-separated list of stages to inject conditioning "
                              "(e.g. 'bridge' or 'e1,e2,e3,e4,bridge,d4,d3,d2,d1'). "
-                             "Default: all stages. Only used with --architecture conditioned")
+                             "Default: all stages. Used with --architecture conditioned or flow_matching")
     parser.add_argument("--cond-method", type=str, choices=["concat", "film"], default="concat",
                         help="conditioning method: 'concat' (default) or 'film' (FiLM modulation)")
 
@@ -137,7 +137,7 @@ def main():
         
         print("Loading preprocessed data...")
 
-        if args.architecture == 'conditioned':
+        if args.architecture in ('conditioned', 'flow_matching'):
             train_ds = ConditionedPreprocessedDataset(args.train_inputs[0])
             test_ds = ConditionedPreprocessedDataset(args.test_inputs[0])
             _cond_dim = train_ds.get_cond_dim()
